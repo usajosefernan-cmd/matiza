@@ -1,37 +1,10 @@
 ---
-export const prerender = true;
+export const prerender = false;
 import fs from 'node:fs';
 import path from 'node:path';
 import Layout from '../../layouts/Layout.astro';
 import ShareBar from '../../components/ShareBar.astro';
 import { getDatabase } from '../../lib/db.js';
-
-export async function getStaticPaths() {
-  const db = getDatabase();
-  const articles = db.prepare("SELECT slug FROM articles WHERE status = 'publicado'").all();
-  db.close();
-
-  const paths = articles.map(art => ({
-    params: { slug: art.slug }
-  }));
-
-  // Buscar archivos JSON dinámicos que empiecen por "articulo_" en el directorio raíz de matizame
-  const projectRoot = path.resolve('.');
-  
-  try {
-    const files = fs.readdirSync(projectRoot);
-    files.forEach(file => {
-      if (file.startsWith('articulo_') && file.endsWith('.json')) {
-        const slug = file.replace('articulo_', '').replace('.json', '').replace(/_/g, '-');
-        paths.push({ params: { slug } });
-      }
-    });
-  } catch (err) {
-    console.warn('[Static Paths] Error al escanear archivos JSON locales:', err.message);
-  }
-
-  return paths;
-}
 
 const { slug } = Astro.params;
 const db = getDatabase();
@@ -398,9 +371,15 @@ function renderMarkdown(md) {
           <span style="font-size: 0.65rem; font-weight: 800; text-transform: uppercase; color: var(--neon-rose); display: block; margin-bottom: 0.4rem; letter-spacing: 0.08em; font-family: monospace;">
             🚨 ORIGEN DE LA DECLARACIÓN DETECTADA:
           </span>
-          <p style="font-size: 0.88rem; margin: 0 0 0.75rem 0; line-height: 1.5; color: var(--text-muted); font-style: italic;">
+          <p style="font-size: 0.88rem; margin: 0 0 0.5rem 0; line-height: 1.5; color: var(--text-muted); font-style: italic;">
             "{article.claim || 'Publicación en redes sociales.'}"
           </p>
+          {article.origin_summary && article.origin_summary !== article.claim && (
+            <div style="margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; border-left: 2px solid var(--neon-amber); background: rgba(255, 176, 32, 0.02); font-size: 0.75rem; color: #a9b2c3; line-height: 1.4;">
+              <span style="color: var(--neon-amber); font-weight: bold; font-size: 0.65rem; text-transform: uppercase; display: block; margin-bottom: 0.15rem;">Comentario / Duda reportada:</span>
+              "{article.origin_summary}"
+            </div>
+          )}
           <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
             <span>Plataforma: <strong style="color: #fff;">{article.origin_platform || 'Instagram'}</strong></span>
             <span style="color: rgba(255,255,255,0.15);">|</span>

@@ -10,7 +10,7 @@ const baseRoute = isDev ? '/' : (process.env.PUBLIC_BASE_PATH || env.PUBLIC_BASE
 export default defineConfig({
   site: 'https://143-47-35-167.sslip.io',
   base: baseRoute,
-  output: 'hybrid',
+  output: 'server',
   adapter: node({
     mode: 'standalone'
   }),

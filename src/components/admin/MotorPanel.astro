@@ -75,24 +75,24 @@ const agentsList = [
   
   <div class="cyber-card" style="padding: 1.25rem; border: 1px solid rgba(0, 240, 255, 0.35); border-radius: 10px; background: rgba(0, 240, 255, 0.02);">
     <h4 style="margin: 0 0 0.75rem 0; font-size: 0.85rem; color: var(--neon-blue); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.5rem;">
-      🤖 Motor Local de Inferencia (Antigravity Core)
+      🤖 Motor Inteligente Nativo (Antigravity Agent)
     </h4>
     <div style="font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.6rem; color: #a9b2c3;">
       <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 0.4rem;">
-        <span>API Endpoint:</span>
-        <strong style="color: #fff; font-family: monospace;">http://127.0.0.1:3010/v1/messages</strong>
+        <span>Ejecutor:</span>
+        <strong style="color: #fff; font-family: monospace;">Antigravity Agent (IDE Core)</strong>
       </div>
       <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 0.4rem;">
-        <span>Modelo Core:</span>
-        <strong style="color: var(--neon-blue); font-family: monospace;">Antigravity local-main (IDE Core)</strong>
+        <span>Tipo de Ejecutor:</span>
+        <strong style="color: var(--neon-blue); font-family: monospace;">Agente Nativo Programado</strong>
       </div>
       <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 0.4rem;">
-        <span>Control Concurrencia:</span>
-        <strong style="color: var(--neon-amber);">Semáforo Activo (Delay 1.5s)</strong>
+        <span>Método de Inferencia:</span>
+        <strong style="color: var(--neon-amber);">Scheduled Task (Intercambio en Disco)</strong>
       </div>
       <div style="display: flex; justify-content: space-between; padding-bottom: 0.2rem;">
-        <span>Fallback Offline:</span>
-        <strong style="color: #00ffc4; font-family: monospace;">Habilitado (Archivos JSON en Disco)</strong>
+        <span>API Externa / Endpoint:</span>
+        <strong style="color: var(--neon-rose); font-family: monospace;">No utilizada / No existe (Offline)</strong>
       </div>
     </div>
   </div>
@@ -137,13 +137,13 @@ const agentsList = [
 
 </div>
 
-<!-- HISTORIAL DE EJECUCIONES DEL PIPELINE DE HERMES -->
+<!-- HISTORIAL DE EJECUCIONES DEL PIPELINE DE ANTIGRAVITY -->
 <div class="cyber-card" style="padding: 1.5rem; border: 1px solid rgba(255, 176, 32, 0.35); border-radius: 12px; background: rgba(18, 22, 41, 0.35); margin-bottom: 2rem; box-shadow: 0 0 15px rgba(255, 176, 32, 0.05);">
   <h3 class="card-title" style="margin-top: 0; margin-bottom: 0.5rem; font-size: 1.1rem; color: var(--neon-amber); display: flex; align-items: center; gap: 0.5rem;">
-    📊 Historial de Auditoría de Ejecuciones de Hermes
+    📊 Historial de Ejecuciones de Antigravity
   </h3>
   <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1.25rem; margin-top: 0;">
-    Registro histórico de telemetría y rendimiento de los crons unificados del pipeline de IA en vivo.
+    Registro histórico de telemetría y rendimiento de los Schedules ejecutados de forma local por el Agente de Antigravity.
   </p>
 
   {pipelineRuns.length > 0 ? (
@@ -283,60 +283,38 @@ const agentsList = [
   </div>
 </div>
 
-<!-- EDITOR SEMÁNTICO DE PIPELINE EN VIVO (ORGANIZADO POR AGENTES COHERENTES) -->
+<!-- EDITOR SEMÁNTICO DE PIPELINE EN VIVO (CON CEREBRO LOCAL DE ANTIGRAVITY) -->
 <div class="cyber-card" style="padding: 1.5rem; border-color: var(--neon-amber); background: rgba(18, 22, 41, 0.35); text-align: left;">
   <h3 class="card-title" style="color: var(--neon-amber); margin-top: 0; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
-    🧠 Consola de Configuración y Ejecución de los Agentes en Vivo
+    🧠 Consola de Configuración y Ejecución de los Agentes de Antigravity
   </h3>
   <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.5rem; line-height: 1.45;">
-    Personaliza las directrices, proveedores de IA y modelos asignados a los 5 agentes autónomos que gestionan el motor de Matiza. Las instrucciones de cada fase se despliegan en acordeones individuales.
+    Visualiza el rol de los 5 agentes autónomos locales de Antigravity y edita sus directrices y system prompts. El enrutamiento y ejecución es gestionado nativa y localmente de fondo.
   </p>
 
   <form method="POST" style="margin: 0; display: flex; flex-direction: column; gap: 1.5rem;">
     <input type="hidden" name="action" value="save_pipeline_config" />
     
-    <!-- Parámetros Globales del Servidor -->
-    <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; border: 1px solid rgba(255, 176, 32, 0.15); display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
-      <span style="grid-column: 1 / -1; font-size: 0.75rem; font-weight: 800; color: var(--neon-amber); text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: -0.25rem;">Parámetros de Servidor y Fallback Global:</span>
+    <!-- Parámetros Globales del Servidor Purgados -->
+    <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; border: 1px solid rgba(255, 176, 32, 0.15); display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+      <span style="grid-column: 1 / -1; font-size: 0.75rem; font-weight: 800; color: var(--neon-amber); text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: -0.25rem;">Parámetros del Servidor de Inferencia Local:</span>
       
-      <div class="form-group">
-        <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.3rem; font-weight: bold;">Proveedor IA por Defecto:</label>
-        <select name="global_provider" style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #fff; padding: 0.45rem; border-radius: 4px; font-size: 0.8rem; outline: none;">
-          <option value="freellmapi" selected={config.global.default_provider === 'freellmapi'}>FreeLLMAPI Gateway (Local/VPS)</option>
-          <option value="gemini" selected={config.global.default_provider === 'gemini'}>Gemini (Google DeepMind)</option>
-          <option value="nous" selected={config.global.default_provider === 'nous'}>Nous Research (Inferencia Libre)</option>
-        </select>
+      <div class="form-group" style="grid-column: span 1;">
+        <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.3rem; font-weight: bold;">Cerebro de Inferencia Principal:</label>
+        <div style="background: #05070e; border: 1px solid var(--border-color); color: var(--neon-blue); padding: 0.45rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold; font-family: monospace;">
+          Antigravity local-main (IDE Core)
+        </div>
       </div>
 
-      <div class="form-group">
-        <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.3rem; font-weight: bold;">Proveedor de Fallback (Respaldo):</label>
-        <select name="fallback_provider" style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #fff; padding: 0.45rem; border-radius: 4px; font-size: 0.8rem; outline: none;">
-          <option value="gemini" selected={config.global.fallback_provider === 'gemini'}>Gemini (Google)</option>
-          <option value="freellmapi" selected={config.global.fallback_provider === 'freellmapi'}>FreeLLMAPI Gateway</option>
-          <option value="nous" selected={config.global.fallback_provider === 'nous'}>Nous Research (Recomendado)</option>
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.3rem; font-weight: bold;">Modelo de Fallback (Respaldo):</label>
-        <input type="text" name="fallback_model" value={config.global.fallback_model || 'gemini-2.5-flash'} style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #fff; padding: 0.45rem; border-radius: 4px; font-size: 0.8rem; outline: none;" />
-      </div>
-
-      <div class="form-group">
-        <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.3rem; font-weight: bold;">Timeout Máximo (ms):</label>
-        <input type="number" name="global_timeout" value={config.global.timeout_ms || 180000} style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #fff; padding: 0.45rem; border-radius: 4px; font-size: 0.8rem; outline: none;" />
-      </div>
-
-      <div class="form-group" style="grid-column: span 2;">
-        <label style="display: block; font-size: 0.7rem; color: var(--neon-amber); margin-bottom: 0.3rem; font-weight: bold;">⚡ Piloto Automático (Publicación Directa en Vivo):</label>
-        <select name="autopilot" style="width: 100%; background: #05070e; border: 1px solid var(--neon-amber); color: #ffb020; padding: 0.45rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold; outline: none;">
-          <option value="false" selected={!config.global.autopilot}>DESACTIVADO (Guardar borradores para moderar)</option>
-          <option value="true" selected={!!config.global.autopilot}>ACTIVADO (Publicar desmentidos directos en vivo)</option>
+      <div class="form-group" style="grid-column: span 1;">
+        <label style="display: block; font-size: 0.7rem; color: var(--neon-rose); margin-bottom: 0.3rem; font-weight: bold;">⚡ Publicación Automática:</label>
+        <select name="autopilot" style="width: 100%; background: #05070e; border: 1px solid var(--neon-rose); color: var(--neon-rose); padding: 0.45rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold; outline: none;" disabled>
+          <option value="false" selected>DESACTIVADA Y BLOQUEADA (Bajo moderación)</option>
         </select>
       </div>
     </div>
 
-    <!-- AGENTES COORDINADOS DEL MOTOR (5 BLOQUES DE AGENTES) -->
+    <!-- AGENTES COORDINADOS DEL MOTOR (5 BLOQUES DE AGENTES CON PROMPTS) -->
     <div style="display: flex; flex-direction: column; gap: 1.5rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.5rem;">
       {agentsList.map(agent => (
         <div class="cyber-card" style="padding: 1.25rem; border-color: rgba(255, 255, 255, 0.05); background: rgba(0, 0, 0, 0.15); border-left: 3px solid var(--neon-amber);">
@@ -349,8 +327,8 @@ const agentsList = [
               if (!ph) return null;
               const phConf = config.phases[ph.id] || {};
               return (
-                <div style="background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.04); padding: 1rem; border-radius: 8px; display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 0.75rem; align-items: start;">
-                  <div style="grid-column: span 4; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 0.5rem; margin-bottom: 0.25rem; display: flex; justify-content: space-between; align-items: center;">
+                <div style="background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.04); padding: 1rem; border-radius: 8px; display: flex; flex-direction: column; gap: 0.75rem;">
+                  <div style="border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
                     <span style="font-weight: bold; font-size: 0.85rem; color: #fff;">
                       {ph.name} 
                       <span style="font-weight: normal; font-size: 0.7rem; color: var(--text-muted); margin-left: 0.5rem;">({ph.script})</span>
@@ -360,41 +338,13 @@ const agentsList = [
                     </button>
                   </div>
                   
-                  <div class="form-group" style="grid-column: span 1;">
-                    <label style="display: block; font-size: 0.65rem; color: var(--text-muted); margin-bottom: 0.25rem;">Proveedor:</label>
-                    <select name={`phase_${ph.id}_provider`} style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #fff; padding: 0.35rem; border-radius: 4px; font-size: 0.75rem; outline: none;">
-                      <option value="freellmapi" selected={phConf.provider === 'freellmapi'}>FreeLLMAPI</option>
-                      <option value="gemini" selected={phConf.provider === 'gemini'}>Gemini</option>
-                      <option value="nous" selected={phConf.provider === 'nous'}>Nous (Free)</option>
-                    </select>
-                  </div>
-
-                  <div class="form-group" style="grid-column: span 2;">
-                    <label style="display: block; font-size: 0.65rem; color: var(--text-muted); margin-bottom: 0.25rem;">
-                      Modelo a usar:
-                      <span style="margin-left: 0.25rem; font-size: 0.6rem; font-weight: normal;">
-                        (Sugeridos:
-                        <a href="javascript:void(0)" onclick={`document.getElementsByName('phase_${ph.id}_model')[0].value='auto'`} style="color: var(--neon-amber); text-decoration: none; margin-right: 0.2rem; font-weight: bold;">auto</a>|
-                        <a href="javascript:void(0)" onclick={`document.getElementsByName('phase_${ph.id}_model')[0].value='gemini-2.5-flash'`} style="color: #00ffc4; text-decoration: none; margin-right: 0.2rem; margin-left: 0.2rem;">flash</a>|
-                        <a href="javascript:void(0)" onclick={`document.getElementsByName('phase_${ph.id}_model')[0].value='deepseek-r1'`} style="color: #ff00ff; text-decoration: none; margin-right: 0.2rem; margin-left: 0.2rem;">r1</a>|
-                        <a href="javascript:void(0)" onclick={`document.getElementsByName('phase_${ph.id}_model')[0].value='deepseek-v3'`} style="color: #00f0ff; text-decoration: none; margin-left: 0.2rem;">v3</a>)
-                      </span>
-                    </label>
-                    <input type="text" name={`phase_${ph.id}_model`} value={phConf.model || 'gemini-2.5-flash'} style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #fff; padding: 0.35rem; border-radius: 4px; font-size: 0.75rem; outline: none;" />
-                  </div>
-
-                  <div class="form-group" style="grid-column: span 1;">
-                    <label style="display: block; font-size: 0.65rem; color: var(--text-muted); margin-bottom: 0.25rem;">Temperatura:</label>
-                    <input type="number" step="0.1" min="0" max="1" name={`phase_${ph.id}_temp`} value={phConf.temperature !== undefined ? phConf.temperature : 0.2} style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #fff; padding: 0.35rem; border-radius: 4px; font-size: 0.75rem; outline: none;" />
-                  </div>
-
                   <!-- ACORDEÓN EXPANSIVO PARA PROMPT SISTEMA -->
-                  <div class="form-group" style="grid-column: span 4; border-top: 1px dashed rgba(255,255,255,0.04); padding-top: 0.5rem; margin-top: 0.25rem;">
-                    <details style="width: 100%;">
+                  <div class="form-group" style="width: 100%;">
+                    <details style="width: 100%;" open>
                       <summary style="cursor: pointer; font-size: 0.75rem; color: var(--neon-amber); font-weight: bold; outline: none; list-style: none; display: flex; align-items: center; gap: 0.25rem;">
-                        <span>📝 Ver/Editar Instrucciones y Rol del Agente (System Prompt)</span>
+                        <span>📝 Instrucciones y Rol del Agente (System Prompt)</span>
                       </summary>
-                      <textarea name={`phase_${ph.id}_prompt`} rows="8" style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #a9b2c3; padding: 0.5rem; border-radius: 4px; font-size: 0.75rem; font-family: monospace; resize: vertical; line-height: 1.45; margin-top: 0.5rem; outline: none;">{phConf.system_prompt || ''}</textarea>
+                      <textarea name={`phase_${ph.id}_prompt`} rows="6" style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #a9b2c3; padding: 0.5rem; border-radius: 4px; font-size: 0.75rem; font-family: monospace; resize: vertical; line-height: 1.45; margin-top: 0.5rem; outline: none;">{phConf.system_prompt || ''}</textarea>
                     </details>
                   </div>
                 </div>
@@ -407,6 +357,11 @@ const agentsList = [
 
     <div style="display: flex; justify-content: flex-end; align-items: center; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1rem;">
       <button type="submit" class="cyber-btn" style="border-color: var(--neon-amber); color: var(--neon-amber); font-weight: bold; cursor: pointer; padding: 0.6rem 1.5rem; border-radius: 6px; font-size: 0.8rem;">
+        💾 Guardar Directrices de los Agentes
+      </button>
+    </div>
+  </form>
+</div>dius: 6px; font-size: 0.8rem;">
         💾 Guardar Configuración de los Agentes
       </button>
     </div>
