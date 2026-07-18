@@ -178,6 +178,24 @@ if (article && article.origin_url && (article.origin_platform === 'TikTok' || ar
   }
 }
 
+// Extraer Twitter Tweet ID si es aplicable
+let twitterTweetId = '';
+if (article && article.origin_url && (article.origin_url.includes('twitter.com') || article.origin_url.includes('x.com'))) {
+  const match = article.origin_url.match(/status\/(\d+)/);
+  if (match) {
+    twitterTweetId = match[1];
+  }
+}
+
+// Extraer Instagram Post ID si es aplicable
+let instagramPostId = '';
+if (article && article.origin_url && article.origin_url.includes('instagram.com')) {
+  const match = article.origin_url.match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
+  if (match) {
+    instagramPostId = match[2];
+  }
+}
+
 const base = import.meta.env.BASE_URL;
 const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base;
 
@@ -442,7 +460,7 @@ function renderMarkdown(md) {
       </div>
     )}
 
-    <!-- Portada Multimedia / Captura de Vídeo o Reproductor Incrustado del Artículo -->
+    <!-- Portada Multimedia / Reproductor Incrustado o Visor en Vivo (Embed Obligatorio) -->
     {directYoutubeId ? (
       <div style="margin-bottom: 2.25rem; border-radius: 12px; overflow: hidden; border: 1px solid var(--neon-blue); background: #000; box-shadow: 0 8px 30px rgba(0, 240, 255, 0.15); aspect-ratio: 16/9; position: relative;">
         <iframe src={`https://www.youtube.com/embed/${directYoutubeId}`} style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
@@ -450,6 +468,33 @@ function renderMarkdown(md) {
     ) : tiktokVideoId ? (
       <div style="margin-bottom: 2.25rem; border-radius: 12px; overflow: hidden; border: 1px solid var(--neon-rose); background: #000; box-shadow: 0 8px 30px rgba(220, 39, 67, 0.15); aspect-ratio: 9/16; max-width: 320px; margin-left: auto; margin-right: auto; position: relative;">
         <iframe src={`https://www.tiktok.com/embed/v2/${tiktokVideoId}`} style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" allowfullscreen></iframe>
+      </div>
+    ) : instagramPostId ? (
+      <div style="margin-bottom: 2.25rem; border-radius: 12px; overflow: hidden; border: 1px solid var(--neon-purple); background: #0b0d19; box-shadow: 0 8px 30px rgba(157, 78, 221, 0.15); max-width: 450px; margin-left: auto; margin-right: auto; min-height: 480px;">
+        <iframe src={`https://www.instagram.com/p/${instagramPostId}/embed/captioned/`} style="width: 100%; height: 500px; border: 0; display: block;" allowtransparency="true" allowfullscreen></iframe>
+      </div>
+    ) : twitterTweetId ? (
+      <div class="twitter-embed-wrapper" style="margin-bottom: 2.25rem; display: flex; flex-direction: column; align-items: center; background: rgba(0,0,0,0.4); border-radius: 12px; padding: 1.25rem; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 8px 30px rgba(0,0,0,0.3);">
+        <blockquote class="twitter-tweet" data-theme="dark" data-align="center" style="margin: 0 !important;">
+          <a href={article.origin_url}>Cargando publicación original...</a>
+        </blockquote>
+        <script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
+      </div>
+    ) : article.origin_url && !article.origin_url.includes('unsplash.com') ? (
+      <div style="margin-bottom: 2.25rem; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); background: #0b0d19; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4); display: flex; flex-direction: column;">
+        <div style="background: rgba(255,255,255,0.03); padding: 0.6rem 1.2rem; border-bottom: 1px solid rgba(255,255,255,0.06); display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; font-family: monospace;">
+          <span style="color: var(--text-muted); display: inline-flex; align-items: center; gap: 0.4rem;">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background: #00f0ff; display: inline-block;"></span>
+            VISOR WEB INTERACTIVO: {article.origin_url.substring(0, 45)}...
+          </span>
+          <a href={article.origin_url} target="_blank" rel="noopener noreferrer" style="color: var(--neon-blue); font-weight: 800; text-decoration: none; display: inline-flex; align-items: center; gap: 0.25rem;">
+            Abrir en pestaña nueva
+            <svg style="width: 10px; height: 10px;" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+            </svg>
+          </a>
+        </div>
+        <iframe src={article.origin_url} style="width: 100%; height: 380px; border: 0; background: #ffffff;" sandbox="allow-scripts allow-same-origin allow-popups"></iframe>
       </div>
     ) : article.multimedia_url && !article.multimedia_url.includes('unsplash.com/photo-1541872703-74c5e44368f9') ? (
       <div style="margin-bottom: 2rem; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); background: #000; box-shadow: 0 8px 30px rgba(0,0,0,0.5);">
