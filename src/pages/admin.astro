@@ -422,11 +422,10 @@ if (Astro.request.method === 'POST') {
         messageType = 'success';
 
         // Lanzar pipeline de IA en segundo plano de forma asíncrona no bloqueante
-        exec('node scripts/ai-pipeline.js && node scripts/sync.js', (err) => {
+        // Lanzar reclamo manual de la cola en Antigravity
+        exec('node scripts/antigravity-runner.js --claim', (err) => {
           if (err) {
-            console.error('Error ejecutando pipeline de IA asíncrono:', err.message);
-          } else {
-            console.log('Pipeline de IA y Sincronización completados con éxito.');
+            console.error('Error lanzando runner de Antigravity:', err.message);
           }
         });
       }
@@ -442,16 +441,24 @@ if (Astro.request.method === 'POST') {
     else if (action === 'process_radar_item') {
       const itemId = data.get('item_id')?.toString() || '';
       if (itemId) {
-        // Cambiar el estado a 'procesando' de inmediato para retirarlo de la vista del usuario en el recargado
-        db.prepare("UPDATE scraped_items SET status = 'procesando' WHERE id = ?").run(itemId);
-        message = `✓ Procesamiento de IA iniciado para este claim. Los borradores estarán listos en unos instantes.`;
-        messageType = 'success';
+        const item = db.prepare("SELECT * FROM scraped_items WHERE id = ?").get(itemId) as any;
+        if (item) {
+          db.prepare("UPDATE scraped_items SET status = 'procesando' WHERE id = ?").run(itemId);
+          
+          // Crear un job en la cola para Antigravity
+          const jobId = `job-radar-man-${Date.now().toString().slice(-4)}`;
+          db.prepare(`
+            INSERT INTO verification_jobs (id, job_type, input_url, input_text, status, priority, attempts, created_at, updated_at)
+            VALUES (?, 'social_radar_candidate', ?, ?, 'queued', 'high', 0, datetime('now'), datetime('now'))
+          `).run(jobId, item.url || '', item.detected_claim || item.text || '');
 
-        exec('node scripts/ai-pipeline.js && node scripts/sync.js', (err) => {
-          if (err) {
-            console.error('Error procesando item de radar con IA:', err.message);
-          }
-        });
+          message = `✓ Solicitud encolada con éxito (ID: ${jobId}). El Agente de Antigravity procesará el caso en su próximo Schedule.`;
+          messageType = 'success';
+
+          exec('node scripts/antigravity-runner.js --claim', (err) => {
+            if (err) console.error('Error al despertar runner manual:', err.message);
+          });
+        }
       }
     }
     else if (action === 'discard_radar_item') {
@@ -467,53 +474,25 @@ if (Astro.request.method === 'POST') {
       const phase = data.get('phase')?.toString() || '';
 
       if (articleId && phase) {
-        // Forzar reprocesado de fase
         try {
           const art = db.prepare("SELECT * FROM articles WHERE id = ?").get(articleId) as any;
           if (art) {
-            if (phase === '08-article-writer') {
-              const { writeArticle } = await import('../../scripts/matiza-engine/08-article-writer.js' as any);
-              const sources = db.prepare("SELECT * FROM sources WHERE article_id = ?").all(articleId) as any[];
-              const updated = await writeArticle(art.claim, {
-                verdict: art.verdict,
-                verdict_reasoning: art.explanation,
-                what_is_true: art.what_is_true,
-                what_is_false: art.what_is_false,
-                what_lacks_context: art.what_lacks_context,
-                what_is_not_proven: art.what_is_not_proven
-              }, sources);
+            // Encolar reprocesado en la cola local para el Schedule de Antigravity
+            const jobId = `job-reproc-${Date.now().toString().slice(-4)}`;
+            db.prepare(`
+              INSERT INTO verification_jobs (id, job_type, input_url, input_text, status, priority, attempts, created_at, updated_at)
+              VALUES (?, 'reprocess_article', ?, ?, 'queued', 'high', 0, datetime('now'), datetime('now'))
+            `).run(jobId, `/noticia/${art.slug}`, `${phase}:${articleId}`);
 
-              db.prepare(`
-                UPDATE articles
-                SET title = ?, subtitle = ?, summary = ?, explanation = ?, updated_at = datetime('now')
-                WHERE id = ?
-              `).run(updated.title, updated.subtitle, updated.summary, updated.explanation, articleId);
-              message = `✓ Fase 08 (Redacción) reprocesada correctamente para este artículo.`;
-              messageType = 'success';
-              } else if (phase === '11-social-writer') {
-              const { writeSocialPosts } = await import('../../scripts/matiza-engine/11-social-writer.js' as any);
-              const posts = await writeSocialPosts(art.title, art.subtitle, art.verdict, art.claim);
+            message = `✓ Solicitud de reprocesado para la fase ${phase} encolada con éxito (ID: ${jobId}). El Agente de Antigravity la procesará de fondo.`;
+            messageType = 'success';
 
-              db.prepare("DELETE FROM social_posts WHERE article_id = ?").run(articleId);
-              const insertSocialPost = db.prepare(`
-                INSERT OR REPLACE INTO social_posts (id, article_id, platform, format, content, status, scheduled_at, published_at)
-                VALUES (?, ?, ?, ?, ?, 'borrador', null, null)
-              `);
-              posts.forEach((post: any, idx: number) => {
-                insertSocialPost.run(
-                  `soc-ai-${Date.now()}-${idx}-${Math.floor(Math.random() * 100)}`,
-                  articleId,
-                  post.platform,
-                  post.format,
-                  post.content
-                );
-              });
-              message = `✓ Fase 11 (Social Writer) reprocesada correctamente. Hilos sociales actualizados.`;
-              messageType = 'success';
-            }
+            exec('node scripts/antigravity-runner.js --claim', (err) => {
+              if (err) console.error('Error al despertar runner manual de reprocesado:', err.message);
+            });
           }
         } catch (e: any) {
-          message = ` Error al reprocesar fase: ${e.message}`;
+          message = `❌ Error al encolar reprocesado: ${e.message}`;
           messageType = 'error';
         }
       }

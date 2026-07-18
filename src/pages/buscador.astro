@@ -84,7 +84,7 @@ if (queryNormalized.length > 0) {
   db.close();
 }
 
-// LÓGICA DE VERIFICACIÓN EN VIVO POR IA & SCRAPER
+// LÓGICA DE ENCOLADO DE VERIFICACIÓN EN VIVO (MIGRADO A ANTIGRAVITY COLA)
 if (verify && queryNormalized.length > 0) {
   const log = (msg: string) => {
     const time = new Date().toLocaleTimeString('es-ES');
@@ -98,78 +98,47 @@ if (verify && queryNormalized.length > 0) {
     scrapedData = null;
 
     if (isUrl) {
-      log(`Detectada URL. Iniciando raspador en caliente de la plataforma...`);
+      log(`Detectada URL. Raspando metadatos preliminares...`);
       scrapedData = await analyzeUrl(query);
-      if (scrapedData.isAccessible) {
-        log(`Raspado exitoso. Plataforma: ${scrapedData.platform}. Título extraído: "${scrapedData.title.substring(0, 50)}..."`);
-      } else {
-        log(` Advertencia de acceso al raspador: ${scrapedData.error || 'La plataforma bloquea acceso directo. Usando fallback.'}`);
-      }
+      log(`Metadatos analizados. Plataforma: ${scrapedData.platform || 'Desconocida'}`);
     } else {
-      log(`Detectado texto plano. Procediendo a realizar búsqueda semántica e investigación directa por IA...`);
+      log(`Detectada afirmación en texto plano.`);
     }
 
-    log(`Conectando con el verificador real del motor (con fallback multi-provider)...`);
-    const { verifyClaim } = await import('../../scripts/matiza-engine/07-verifier.js' as any);
-
-    const sources = scrapedData ? [{
-      title: scrapedData.title || `Contenido de ${scrapedData.platform || 'URL'}`,
-      url: query,
-      source_type: 'web_scrape',
-      authority_level: 'Media',
-      quote_or_summary: scrapedData.title || ''
-    }] : [];
-
-    const verifyResult = await verifyClaim(query, sources);
-
-    if (!verifyResult || !verifyResult.verdict) {
-      throw new Error('El verificador no pudo obtener un veredicto válido.');
-    }
-
-    const trimmedQuery = query.trim();
-    const title = (trimmedQuery.startsWith('¿') && trimmedQuery.endsWith('?'))
-      ? trimmedQuery
-      : `¿Es cierto lo que se afirma sobre "${trimmedQuery.replace(/\.$/, '')}"?`;
-
-    const explanation = verifyResult.verdict_reasoning || '';
-    const summary = verifyResult.summary || `${verifyResult.verdict}: ${verifyResult.what_is_true || ''} ${verifyResult.what_is_false || ''}`.trim().substring(0, 200) + '...';
-    const liveSources = scrapedData ? [{ title: scrapedData.title || `Contenido de ${scrapedData.platform || 'URL'}`, url: query }] : [];
-
-    liveResult = {
-      title,
-      verdict: verifyResult.verdict,
-      confidence: verifyResult.confidence,
-      summary,
-      explanation,
-      what_is_true: verifyResult.what_is_true,
-      what_is_false: verifyResult.what_is_false,
-      sources: liveSources
-    };
-
-    log(`Auditoría de IA completada. Veredicto determinado: "${liveResult.verdict}".`);
-    log(`Guardando resultados en los registros del portal...`);
-
-    // Guardar en base de datos
+    log(`Encolando solicitud de verificación en la cola local de Antigravity...`);
+    
     const db = getDatabase();
-    const verifId = `verif-${Date.now()}`;
+    const jobId = `job-web-${Date.now().toString().slice(-6)}`;
+    const inputUrl = isUrl ? query : '';
+    const inputText = isUrl ? '' : query;
 
     db.prepare(`
+      INSERT INTO verification_jobs (
+        id, job_type, input_url, input_text, status, priority, attempts, created_at, updated_at
+      ) VALUES (?, 'user_verification', ?, ?, 'queued', 'high', 0, datetime('now'), datetime('now'))
+    `).run(jobId, inputUrl, inputText);
+
+    log(`🎉 [ÉXITO] Solicitud registrada correctamente con ID: ${jobId}`);
+    log(`El Agente de Antigravity (motor local) procesará esta solicitud de fondo en su próximo Schedule.`);
+    log(`Puedes hacer seguimiento en tiempo real desde la página del Radar.`);
+
+    // Guardar log de auditoría
+    const verifId = `verif-${Date.now()}`;
+    db.prepare(`
       INSERT INTO verification_logs (id, query_text, ip_address, status, verdict, scraped_metadata_json, execution_log, created_at)
-      VALUES (?, ?, 'Local User', ?, ?, ?, ?, datetime('now'))
+      VALUES (?, ?, 'Local User', 'queued_in_radar', 'En Cola', ?, ?, datetime('now'))
     `).run(
       verifId,
       query,
-      `live_${liveResult.verdict.toLowerCase().replace(' ', '_')}`,
-      liveResult.verdict,
       JSON.stringify(scrapedData || {}),
       verificationLog.join('\n')
     );
 
     db.close();
-    log(`Guardado completado exitosamente. ID de auditoría: ${verifId}`);
+    log(`Guardado completado. ID de transacción: ${verifId}`);
 
   } catch (err: any) {
-    log(` Error crítico en el motor de verificación: ${err.message}`);
+    log(`❌ Error en el encolamiento: ${err.message}`);
 
     // Intentar registrar el fallo en BD para auditoría
     try {
