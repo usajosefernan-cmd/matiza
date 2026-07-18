@@ -1,0 +1,45 @@
+{
+  "name": "matiza",
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Copiloto de contexto y decisión. Construido por Antigravity y automatizado por Hermes en una VPS Oracle.",
+  "keywords": [
+    "matiza",
+    "ai-news",
+    "fact-checking",
+    "context-copilot",
+    "spain",
+    "scraper",
+    "social-media"
+  ],
+  "scripts": {
+    "dev": "astro build && astro preview --host 0.0.0.0 --port 4321",
+    "dev:hot": "astro dev --host 0.0.0.0 --port 4321",
+    "build": "astro build",
+    "preview": "astro preview --host 0.0.0.0 --port 4321",
+    "db:migrate": "node scripts/migrate.js",
+    "db:seed": "node scripts/import-political.js",
+    "radar": "node scripts/hermes-cron.js",
+    "radar:legacy": "node scripts/radar-cron.js",
+    "ai:pipeline": "node scripts/ai-pipeline.js",
+    "sync": "node scripts/sync.js",
+    "cron:hermes": "node scripts/hermes-cron.js"
+  },
+  "dependencies": {
+    "@astrojs/node": "^8.3.0",
+    "@astrojs/react": "^6.0.0",
+    "@supabase/supabase-js": "^2.110.7",
+    "astro": "^4.16.0",
+    "date-fns": "^3.6.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "xlsx": "^0.18.5",
+    "youtube-transcript": "^1.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.5.0"
+  }
+}

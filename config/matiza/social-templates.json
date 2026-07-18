@@ -1,0 +1,8 @@
+{
+  "x": {
+    "template_short": "🧐 {title}\n\n📝 Claim: \"{claim}\"\n\n🔎 Verdict: {verdict}\n\n✅ Lo cierto: {what_is_true}\n⚠️ El sesgo: {what_is_false}\n\n📊 Análisis completo 👉 {url}"
+  },
+  "telegram": {
+    "template_long": "🧐 *{title}*\n\n📝 *Declaración:* \"{claim}\"\n\n🔎 *Veredicto:* {verdict}\n\n✅ *Lo que se sabe:* {what_is_true}\n\n⚠️ *Lo que falta:* {what_lacks_context}\n\n🔗 Consulta todas las fuentes y el análisis en MATIZA: {url}"
+  }
+}

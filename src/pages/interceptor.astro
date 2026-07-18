@@ -1,0 +1,335 @@
+---
+import Layout from '../layouts/Layout.astro';
+const baseRoute = import.meta.env.BASE_URL;
+const cleanBase = baseRoute.endsWith('/') ? baseRoute.slice(0, -1) : baseRoute;
+---
+
+<Layout title="Interceptor de Bulos — Hermes Engine" description="Audita links virales sospechosos de TikTok, YouTube, Instagram y X en caliente con bases de datos del BOE e INE.">
+  <div id="interceptor-app" class="container" data-base={cleanBase} data-supabase-url={import.meta.env.PUBLIC_SUPABASE_URL} data-supabase-key={import.meta.env.PUBLIC_SUPABASE_ANON_KEY} style="max-width: 600px; padding: 2.5rem 1rem;">
+    
+    <!--  CABECERA CON RADAR GRÁFICO CHULO -->
+    <section style="text-align: center; margin-bottom: 2rem;">
+      <div class="radar-container">
+        <div class="radar-sweep"></div>
+        <div class="radar-grid"></div>
+        <div class="radar-center"></div>
+        <div class="radar-blip" id="radar-active-blip"></div>
+      </div>
+
+      <h1 style="font-size: 2.1rem; font-weight: 900; letter-spacing: -0.04em; margin: 0 0 0.3rem 0; line-height: 1.1; font-family: var(--font-title);">
+        Buzón del <span style="color: var(--neon-blue); text-shadow: 0 0 10px rgba(0, 240, 255, 0.3);">Interceptor</span>
+      </h1>
+      <p style="color: var(--text-muted); font-size: 0.85rem; line-height: 1.45; max-width: 440px; margin: 0 auto;">
+        Inserta un enlace sospechoso. Nuestro radar auditará su viralidad real y el impacto social del tema contrastándolo con fuentes oficiales en tiempo real.
+      </p>
+    </section>
+
+    <!-- Caja del Formulario Cyberpunk con barra de escaneo -->
+    <section class="cyber-card" style="padding: 1.85rem; background: linear-gradient(180deg, rgba(7, 9, 19, 0.95) 0%, rgba(18, 22, 41, 0.85) 100%); border-color: var(--neon-blue); box-shadow: 0 10px 30px rgba(0, 240, 255, 0.03); position: relative; overflow: hidden;">
+      
+      <!-- Barra de Escaneo que se desliza cuando se procesa -->
+      <div id="scanning-laser" class="scanning-bar"></div>
+
+      <form id="public-report-form" style="display: flex; flex-direction: column; gap: 1.25rem;">
+        
+        <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+          <label style="font-size: 0.65rem; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.08em; text-align: left;">Enlace de la publicación sospechosa:</label>
+          <input type="url" id="report-url" placeholder="https://tiktok.com/@user/video/... o https://youtube.com/watch?v=..." required 
+            style="width: 100%; padding: 0.75rem; background: rgba(0,0,0,0.6); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-main); font-size: 0.85rem; outline: none; transition: border-color 0.2s; box-sizing: border-box;" />
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+          <label style="font-size: 0.65rem; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.08em; text-align: left;">¿Qué se afirma en el bulo? (Opcional):</label>
+          <textarea id="report-text" placeholder="Ej: Afirman que los autónomos tendrán una cuota del 50%..." rows="2"
+            style="width: 100%; padding: 0.75rem; background: rgba(0,0,0,0.6); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-main); font-size: 0.85rem; outline: none; transition: border-color 0.2s; resize: none; box-sizing: border-box;"></textarea>
+        </div>
+
+        <button type="submit" id="submit-btn" class="cyber-btn accent" style="width: 100%; padding: 0.85rem; border-radius: 8px; font-weight: 800; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.08em; cursor: pointer; transition: all 0.2s ease;">
+          Interceptar y Auditar Link
+        </button>
+      </form>
+
+      <!-- 🖥️ CONSOLA DE LOGS EN VIVO -->
+      <div id="console-wrapper" style="display: none; margin-top: 1.5rem; background: rgba(5, 7, 15, 0.95); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.15rem; font-family: monospace; font-size: 0.75rem; text-align: left; box-shadow: inset 0 0 10px rgba(0, 240, 255, 0.1); max-height: 250px; overflow-y: auto; scroll-behavior: smooth;">
+        <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(0, 240, 255, 0.1); padding-bottom: 0.5rem; margin-bottom: 0.75rem;">
+          <span style="color: var(--neon-blue); font-weight: 800; font-size: 0.7rem; letter-spacing: 0.05em; text-transform: uppercase; display: flex; align-items: center; gap: 0.35rem;">
+            <span class="pulse-dot"></span> CONSOLA DE AUDITORÍA HERMES
+          </span>
+          <span id="console-status" style="color: var(--neon-amber); font-weight: bold; font-size: 0.65rem; text-transform: uppercase;">PROCESANDO...</span>
+        </div>
+        <div id="console-logs" style="display: flex; flex-direction: column; gap: 0.4rem; line-height: 1.4; color: var(--text-muted);">
+          <!-- Logs dinámicos -->
+        </div>
+      </div>
+    </section>
+
+  </div>
+</Layout>
+
+<script>
+  import { createClient } from '@supabase/supabase-js';
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const appEl = document.getElementById('interceptor-app');
+    if (!appEl) return;
+
+    const cleanBase = appEl.getAttribute('data-base') || '';
+    const supabaseUrl = appEl.getAttribute('data-supabase-url') || '';
+    const supabaseKey = appEl.getAttribute('data-supabase-key') || '';
+    
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    const form = document.getElementById('public-report-form');
+    const submitBtn = document.getElementById('submit-btn');
+    const consoleWrapper = document.getElementById('console-wrapper');
+    const consoleLogs = document.getElementById('console-logs');
+    const consoleStatus = document.getElementById('console-status');
+    const laser = document.getElementById('scanning-laser');
+    const blip = document.getElementById('radar-active-blip');
+
+    if (form) {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const url = document.getElementById('report-url').value;
+        const text = document.getElementById('report-text').value;
+
+        // Activar efectos visuales de escaneo
+        submitBtn.disabled = true;
+        submitBtn.style.opacity = '0.5';
+        submitBtn.innerText = 'ESCANEANDO RED...';
+        
+        laser.style.display = 'block';
+        if (blip) {
+          blip.style.display = 'block';
+          blip.style.animation = 'blipPulse 1s infinite';
+        }
+        
+        consoleLogs.innerHTML = '';
+        consoleWrapper.style.display = 'block';
+        consoleStatus.innerText = 'ANALIZANDO';
+        consoleStatus.style.color = 'var(--neon-amber)';
+
+        const appendLog = (msg, type = 'info') => {
+          const row = document.createElement('div');
+          row.style.wordBreak = 'break-all';
+          
+          if (type === 'success') {
+            row.style.color = '#00ffc4'; // neon green
+          } else if (type === 'error') {
+            row.style.color = '#ff3366'; // neon rose
+          } else if (type === 'warn') {
+            row.style.color = '#ffb020'; // neon amber
+          } else {
+            row.style.color = '#00f0ff'; // neon blue
+          }
+          
+          row.innerText = `> ${msg}`;
+          consoleLogs.appendChild(row);
+          
+          // Auto scroll
+          consoleWrapper.scrollTop = consoleWrapper.scrollHeight;
+        };
+
+        try {
+          appendLog('Conectando con Supabase Event Queue...', 'info');
+          const reportId = `report-web-${Date.now()}`;
+
+          // Suscribirse a realtime antes de insertar para no perder eventos
+          const channel = supabase
+            .channel(`report-changes-${reportId}`)
+            .on(
+              'postgres_changes',
+              {
+                event: 'UPDATE',
+                schema: 'public',
+                table: 'scraped_items_queue',
+                filter: `id=eq.${reportId}`
+              },
+              (payload) => {
+                const updated = payload.new;
+                if (updated.execution_log) {
+                  appendLog(updated.execution_log, 'info');
+                }
+                
+                if (updated.status === 'procesado') {
+                  consoleStatus.innerText = 'COMPLETADO';
+                  consoleStatus.style.color = '#00ffc4';
+                  appendLog(`¡Verificación completada! Título: "${updated.result_title}"`, 'success');
+                  appendLog(`Puedes consultarla aquí: ${window.location.origin}${cleanBase}/noticia/${updated.result_slug}/`, 'success');
+                  unsubscribe();
+                } else if (updated.status === 'error') {
+                  consoleStatus.innerText = 'FALLIDO';
+                  consoleStatus.style.color = '#ff3366';
+                  appendLog(`Error: ${updated.execution_log || 'No se pudo generar el desmentido'}`, 'error');
+                  unsubscribe();
+                }
+              }
+            )
+            .subscribe((status) => {
+              if (status === 'SUBSCRIBED') {
+                appendLog('Suscrito a la cola de eventos en tiempo real.', 'info');
+                // Insertar el reporte en Supabase
+                insertReport();
+              }
+            });
+
+          async function insertReport() {
+            appendLog('Encolando reporte para auditoría local...', 'info');
+            const { error: insertError } = await supabase
+              .from('scraped_items_queue')
+              .insert([
+                { id: reportId, url, text, status: 'pendiente' }
+              ]);
+
+            if (insertError) {
+              appendLog(`Error al registrar reporte: ${insertError.message}`, 'error');
+              unsubscribe();
+            } else {
+              appendLog('Reporte encolado con éxito. Esperando a que el cron de Antigravity procese la petición...', 'warn');
+            }
+          }
+
+          function unsubscribe() {
+            supabase.removeChannel(channel);
+            submitBtn.disabled = false;
+            submitBtn.style.opacity = '1';
+            submitBtn.innerText = 'Interceptar y Auditar Link';
+            laser.style.display = 'none';
+            if (blip) {
+              blip.style.display = 'none';
+            }
+            form.reset();
+          }
+
+        } catch (err) {
+          appendLog(`Error de comunicación con Supabase: ${err.message}`, 'error');
+          consoleStatus.innerText = 'ERROR';
+          consoleStatus.style.color = '#ff3366';
+          submitBtn.disabled = false;
+          submitBtn.style.opacity = '1';
+          submitBtn.innerText = 'Interceptar y Auditar Link';
+          laser.style.display = 'none';
+          if (blip) {
+            blip.style.display = 'none';
+          }
+        }
+      });
+    }
+  });
+</script>
+
+<style is:global>
+  /*  ESTILOS DEL RADAR GRÁFICO */
+  .radar-container {
+    position: relative;
+    width: 130px;
+    height: 130px;
+    margin: 0 auto 1.25rem auto;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(0, 240, 255, 0.03) 0%, rgba(7, 9, 19, 0.95) 75%);
+    border: 1px solid rgba(0, 240, 255, 0.2);
+    overflow: hidden;
+    box-shadow: 0 0 25px rgba(0, 240, 255, 0.05);
+  }
+
+  .radar-sweep {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 200%;
+    height: 200%;
+    background: conic-gradient(from 0deg, rgba(0, 240, 255, 0.15) 0deg, rgba(0, 240, 255, 0) 120deg);
+    transform-origin: top left;
+    transform: translate(-50%, -50%) rotate(0deg);
+    animation: sweep 4s linear infinite;
+    border-radius: 50%;
+  }
+
+  .radar-grid {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    border-radius: 50%;
+    background: 
+      radial-gradient(circle, transparent 25%, rgba(0, 240, 255, 0.08) 26%, transparent 27%, transparent 55%, rgba(0, 240, 255, 0.08) 56%, transparent 57%, transparent 80%, rgba(0, 240, 255, 0.08) 81%, transparent 82%),
+      linear-gradient(to right, rgba(0, 240, 255, 0.03) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
+    background-size: 100% 100%, 15px 15px, 15px 15px;
+    background-position: center;
+  }
+
+  .radar-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 6px;
+    height: 6px;
+    background-color: var(--neon-blue);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 8px var(--neon-blue);
+    z-index: 5;
+  }
+
+  .radar-blip {
+    position: absolute;
+    top: 35%;
+    left: 60%;
+    width: 5px;
+    height: 5px;
+    background-color: var(--neon-rose);
+    border-radius: 50%;
+    display: none;
+    z-index: 4;
+  }
+
+  @keyframes sweep {
+    from { transform: translate(-50%, -50%) rotate(0deg); }
+    to { transform: translate(-50%, -50%) rotate(360deg); }
+  }
+
+  @keyframes blipPulse {
+    0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 39, 67, 0.8); }
+    70% { transform: scale(1.5); box-shadow: 0 0 0 8px rgba(220, 39, 67, 0); }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 39, 67, 0); }
+  }
+
+  /*  LASER DE ESCANEO DE CARD */
+  .scanning-bar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, rgba(0, 240, 255, 0) 0%, rgba(0, 240, 255, 0.8) 50%, rgba(0, 240, 255, 0) 100%);
+    box-shadow: 0 0 10px rgba(0, 240, 255, 0.6);
+    z-index: 10;
+    animation: scan 2s linear infinite;
+    display: none;
+  }
+
+  @keyframes scan {
+    0% { top: 0%; }
+    50% { top: 100%; }
+    100% { top: 0%; }
+  }
+
+  @keyframes pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(0, 240, 255, 0.4);
+    }
+    70% {
+      box-shadow: 0 0 0 10px rgba(0, 240, 255, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(0, 240, 255, 0);
+    }
+  }
+
+  .pulse-dot {
+    width: 6px;
+    height: 6px;
+    background-color: var(--neon-blue);
+    border-radius: 50%;
+    display: inline-block;
+    animation: pulse 1.5s infinite;
+  }
+</style>

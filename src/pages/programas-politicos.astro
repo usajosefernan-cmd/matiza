@@ -1,0 +1,102 @@
+---
+export const prerender = true;
+import Layout from '../layouts/Layout.astro';
+import { getDatabase } from '../lib/db.js';
+import path from 'node:path';
+
+const db = getDatabase();
+
+// Obtener partidos políticos y sus programas electorales
+const parties = db.prepare(`
+  SELECT p.*, ep.election_name, ep.election_date, ep.program_url
+  FROM parties p
+  LEFT JOIN electoral_programs ep ON ep.party_id = p.id AND ep.status = 'activo'
+  ORDER BY p.name
+`).all() as any[];
+
+db.close();
+---
+
+<Layout title="Programas Políticos Desglosados" description="Análisis y traducción a lenguaje claro de los programas electorales de los partidos principales de España.">
+  <div class="container">
+    
+    <div style="margin-bottom: 3rem; text-align: center; max-width: 800px; margin-left: auto; margin-right: auto;">
+      <span style="background: var(--neon-purple); color: var(--text-main); font-weight: 800; font-size: 0.8rem; padding: 0.2rem 0.6rem; text-transform: uppercase; border-radius: 2px;">
+        EDUCACIÓN CÍVICA NEUTRAL
+      </span>
+      <h1 style="font-size: 2.8rem; line-height: 1.1; margin-top: 0.5rem; margin-bottom: 1rem;">
+        Programas <span class="text-gradient-blue">Electorales 2023</span>
+      </h1>
+      <p style="color: var(--text-muted); font-size: 1.1rem;">
+        ¿Votas conociendo las propuestas reales? Traducimos a lenguaje claro e impactos directos las medidas de los programas de los principales partidos políticos de España. Sin sesgos, solo datos y fuentes oficiales.
+      </p>
+
+      <div style="display: flex; align-items: center; justify-content: center; gap: 1rem; margin-top: 1.5rem;">
+        <a href="/comparador-politico" class="cyber-btn accent" style="box-shadow: 2px 2px 0px 0px var(--text-main);">
+          🗳️ Comparar Medidas por Áreas
+        </a>
+        <a href="/bienes-declarados" class="cyber-btn" style="box-shadow: 2px 2px 0px 0px var(--border-color);">
+          💼 Declaración de Bienes de Líderes
+        </a>
+      </div>
+    </div>
+
+    <!-- Lista de Partidos -->
+    <div class="grid-cols-2" style="margin-bottom: 4rem;">
+      {parties.map(party => (
+        <div class="cyber-card" style="padding: 2rem; display: flex; flex-direction: column; justify-content: space-between; gap: 1.5rem;">
+          
+          <div>
+            <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 1rem; margin-bottom: 1rem;">
+              <div>
+                <h2 style="font-size: 1.6rem; color: var(--text-main);">{party.name}</h2>
+                <span style="color: var(--text-muted); font-size: 0.85rem;">Líder: <strong>{party.current_leader}</strong></span>
+              </div>
+              <div style="font-size: 0.75rem; background: var(--bg-dark); border: 1px solid var(--border-color); padding: 0.25rem 0.5rem; color: var(--neon-blue); font-family: monospace;">
+                {party.slug.toUpperCase()}
+              </div>
+            </div>
+
+            <p style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 1.25rem;">
+              <strong>Ideología declarada:</strong> {party.ideology_summary}
+            </p>
+
+            <div style="background: rgba(0,0,0,0.15); padding: 1rem; border-left: 3px solid var(--neon-blue); font-size: 0.9rem;">
+              <strong style="color: var(--text-main); display: block; margin-bottom: 0.25rem;">Programa analizado:</strong>
+              <span style="color: var(--text-muted);">{party.election_name || 'Elecciones Generales'} ({party.election_date || '2023'})</span>
+            </div>
+          </div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border-color); padding-top: 1rem; flex-wrap: wrap; gap: 0.75rem;">
+            {party.program_url ? (
+              <a href={party.program_url} target="_blank" rel="noopener noreferrer" style="color: var(--neon-blue); font-size: 0.85rem; text-decoration: underline;">
+                Programa original completo ↗
+              </a>
+            ) : (
+              <span></span>
+            )}
+            <a href={`/partido/${party.slug}`} class="cyber-btn" style="padding: 0.4rem 0.8rem; font-size: 0.85rem; box-shadow: 2px 2px 0px 0px var(--border-color);">
+              Analizar Propuestas →
+            </a>
+          </div>
+
+        </div>
+      ))}
+    </div>
+
+    <!-- Metodología de Neutralidad -->
+    <section class="cyber-card purple" style="max-width: 800px; margin: 0 auto; background: linear-gradient(180deg, var(--bg-card), #120f26);">
+      <h3 style="color: var(--neon-purple); font-size: 1.25rem; margin-bottom: 0.5rem; font-family: var(--font-title);"> Compromiso de Neutralidad Editorial</h3>
+      <p style="font-size: 0.95rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+        En MATIZA no juzgamos las propuestas políticas, ni recomendamos el voto. Nos limitamos a:
+      </p>
+      <ul style="margin-left: 1.5rem; font-size: 0.95rem; color: var(--text-muted); display: flex; flex-direction: column; gap: 0.35rem;">
+        <li>Citar el texto original del programa electoral para garantizar fidelidad.</li>
+        <li>Traducir a lenguaje llano y comprensible la jerga legal o corporativa.</li>
+        <li>Indicar los grupos sociales beneficiados y perjudicados basándonos en informes económicos técnicos de organismos oficiales (AIReF, Banco de España, INE).</li>
+        <li>Contrastar las promesas pasadas contra los votos emitidos en el Congreso y las leyes publicadas en el BOE.</li>
+      </ul>
+    </section>
+
+  </div>
+</Layout>

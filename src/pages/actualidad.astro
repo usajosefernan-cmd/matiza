@@ -1,0 +1,171 @@
+---
+export const prerender = true;
+import Layout from '../layouts/Layout.astro';
+import { getDatabase } from '../lib/db.js';
+import path from 'node:path';
+
+const db = getDatabase();
+
+// Cargar todos los artículos publicados
+const articles = db.prepare(`
+  SELECT a.*, t.title as topic_title, t.slug as topic_slug
+  FROM articles a
+  LEFT JOIN topics t ON a.topic_id = t.id
+  WHERE a.status = 'publicado'
+  ORDER BY a.published_at DESC, a.created_at DESC
+`).all() as any[];
+
+// Cargar expedientes/temas activos para el filtrado superior
+const topics = db.prepare("SELECT title, slug FROM topics WHERE status = 'activo' ORDER BY title").all() as any[];
+
+db.close();
+
+// Mapa de veredicto a color neón
+const getVerdictClass = (verdict) => {
+  const v = (verdict || '').toLowerCase();
+  if (v.includes('verdadero')) return 'green';
+  if (v.includes('falso')) return 'rose';
+  if (v.includes('engañoso') || v.includes('contexto')) return 'amber';
+  return 'purple';
+};
+
+function getRelativeTime(dateString) {
+  if (!dateString) return 'hace un momento';
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  if (isNaN(diffMs)) return 'hace un momento';
+  const diffMin = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffMin < 1) return 'hace unos segundos';
+  if (diffMin < 60) return `hace ${diffMin} min`;
+  if (diffHours < 24) return `hace ${diffHours} h`;
+  return `hace ${diffDays} días`;
+}
+
+function formatOriginalDate(dateString) {
+  if (!dateString) return 'Reciente';
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return dateString;
+  return date.toLocaleDateString('es-ES', { 
+    day: '2-digit', 
+    month: '2-digit', 
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+const base = import.meta.env.BASE_URL;
+const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base;
+---
+
+<Layout title="Última Hora" description="Informes cronológicos de contrastación y verificación de bulos en España.">
+  <div class="container" style="padding-top: 1.5rem; padding-bottom: 5rem; max-width: 680px;">
+    
+    <div style="margin-bottom: 2rem;">
+      <h1 class="text-gradient-rose" style="font-size: 2.2rem; font-weight: 850; font-family: var(--font-title); letter-spacing: -0.04em; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+        Última Hora
+      </h1>
+      <p style="color: var(--text-muted); font-size: 0.95rem; margin: 0; line-height: 1.4;">
+        Todos los bulos y afirmaciones virales analizados por el cortafuegos, ordenados de forma cronológica.
+      </p>
+    </div>
+
+    <!-- Filtro de Expedientes (Sticky) -->
+    <div style="display: flex; gap: 0.5rem; margin-bottom: 2rem; overflow-x: auto; scrollbar-width: none; align-items: center; position: sticky; top: 64px; z-index: 990; background: rgba(7, 9, 19, 0.95); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); padding: 0.75rem 0.5rem; border-bottom: 1px solid var(--border-color); margin-left: -0.5rem; margin-right: -0.5rem; white-space: nowrap;">
+      <span style="font-size: 0.75rem; font-weight: bold; color: var(--text-muted); text-transform: uppercase; margin-right: 0.5rem; flex-shrink: 0;">Filtrar por expediente:</span>
+      <a href={`${cleanBase}/actualidad`} class="cyber-btn" style="font-size: 0.75rem; padding: 0.35rem 0.75rem; text-decoration: none; border-color: var(--neon-blue); color: var(--neon-blue); flex-shrink: 0;">
+        Ver todo
+      </a>
+      {topics.map(topic => (
+        <a 
+          href={`${cleanBase}/tema/${topic.slug}`} 
+          class="cyber-btn" 
+          style="font-size: 0.75rem; padding: 0.35rem 0.75rem; text-decoration: none; flex-shrink: 0;"
+        >
+          {topic.title}
+        </a>
+      ))}
+    </div>
+
+    <!-- Listado de Artículos (Cronológico) -->
+    <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+      {articles.map(art => (
+        <article class={`cyber-card ${getVerdictClass(art.verdict)}`} style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; transition: transform 0.2s ease, box-shadow 0.2s ease;">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+              <span class={`verdict-badge ${art.verdict.toLowerCase().replace(' ', '-')}`} style="font-size: 0.65rem; padding: 0.15rem 0.4rem;">
+                {art.verdict}
+              </span>
+              <a 
+                href={`${cleanBase}/tema/${art.topic_slug || 'general'}`}
+                style="font-size: 0.7rem; font-weight: bold; color: var(--neon-blue); text-decoration: none; text-transform: uppercase;"
+              >
+                #{art.topic_title || 'General'}
+              </a>
+            </div>
+            <time style="font-size: 0.75rem; color: var(--text-muted);" datetime={art.published_at || art.created_at}>
+              Incorporado {getRelativeTime(art.published_at)}
+            </time>
+          </div>
+
+          <div>
+            <h2 style="font-size: 1.35rem; margin-top: 0; margin-bottom: 0.35rem; font-weight: 750; font-family: var(--font-title); line-height: 1.25;">
+              <a href={`${cleanBase}/noticia/${art.slug}`} style="color: var(--text-main); text-decoration: none; transition: color 0.15s;">
+                {art.title}
+              </a>
+            </h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; line-height: 1.4; margin: 0 0 0.75rem 0;">
+              {art.subtitle}
+            </p>
+            {art.multimedia_url && (
+              <div style="margin-bottom: 1rem; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.06); max-height: 220px; background: #000; display: flex; align-items: center; justify-content: center;">
+                <img src={art.multimedia_url} alt="Portada" style="width: 100%; height: 100%; object-fit: cover; max-height: 220px;" />
+              </div>
+            )}
+            {art.claim && (
+              <div style="background: rgba(0,0,0,0.15); border-left: 2px solid var(--border-color); padding: 0.5rem 0.75rem; font-size: 0.8rem; font-style: italic; color: var(--text-muted); margin-bottom: 0.5rem;">
+                <strong>Claim viral:</strong> "{art.claim}"
+              </div>
+            )}
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 0.75rem; font-size: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+            {art.topic_title ? (
+              <span>Expediente: <a href={`${cleanBase}/tema/${art.topic_slug}`} style="color: var(--neon-purple); text-decoration: none; font-weight: bold;">{art.topic_title}</a></span>
+            ) : (
+              <span style="color: var(--text-muted);">Expediente general</span>
+            )}
+            <span style="color: var(--text-muted); font-size: 0.7rem;">
+              Váa: <strong style="color: var(--text-main);">{art.origin_platform}</strong>
+              {art.origin_date && (
+                <span> &bull; Post: <strong style="color: var(--text-main);">{formatOriginalDate(art.origin_date)}</strong></span>
+              )}
+            </span>
+            <a href={`${cleanBase}/noticia/${art.slug}`} style="color: var(--neon-blue); text-decoration: none; font-weight: 800; display: inline-flex; align-items: center; gap: 0.2rem;">
+              Auditar hechos e informe &rarr;
+            </a>
+          </div>
+        </article>
+      ))}
+
+      {articles.length === 0 && (
+        <div class="cyber-card" style="padding: 3rem; text-align: center; border-color: rgba(255,255,255,0.05);">
+          <p style="color: var(--text-muted); font-size: 1rem; margin: 0;">No se han publicado desmentidos todaváa en el portal.</p>
+        </div>
+      )}
+    </div>
+
+  </div>
+</Layout>
+
+<style is:global>
+  /* Animación hover para los artículos del feed */
+  article:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0, 240, 255, 0.05);
+  }
+</style>

@@ -1,0 +1,104 @@
+---
+export const prerender = true;
+import Layout from '../layouts/Layout.astro';
+import { getDatabase } from '../lib/db.js';
+import path from 'node:path';
+
+const db = getDatabase();
+
+// Cargar todas las declaraciones de patrimonio y bienes, con datos del partido asociado
+const declarations = db.prepare(`
+  SELECT ad.*, p.name as party_name, p.slug as party_slug
+  FROM asset_declarations ad
+  LEFT JOIN parties p ON ad.party_id = p.id
+  ORDER BY ad.person_name
+`).all() as any[];
+
+db.close();
+---
+
+<Layout title="Bienes Declarados de Cargos Públicos" description="Patrimonio, activos, planes de pensiones y deudas oficiales de los líderes políticos en España según el Congreso.">
+  <div class="container" style="max-width: 900px;">
+    
+    <div style="margin-bottom: 3rem; text-align: center; max-width: 700px; margin-left: auto; margin-right: auto;">
+      <span style="background: var(--neon-purple); color: var(--text-main); font-weight: 800; font-size: 0.8rem; padding: 0.2rem 0.6rem; text-transform: uppercase; border-radius: 2px;">
+        AUDITORÍA DE TRANSPARENCIA
+      </span>
+      <h1 style="font-size: 2.8rem; line-height: 1.1; margin-top: 0.5rem; margin-bottom: 1rem;">
+        Bienes <span class="text-gradient-blue">Declarados</span>
+      </h1>
+      <p style="color: var(--text-muted); font-size: 1.1rem;">
+        Explicación detallada y neutral del patrimonio declarado por los líderes de las principales fuerzas políticas nacionales a partir de sus fichas obligatorias en el Congreso de los Diputados.
+      </p>
+    </div>
+
+    <!-- Lista de Fichas de Bienes -->
+    <div style="display: flex; flex-direction: column; gap: 2rem; margin-bottom: 4rem;">
+      {declarations.map(ad => (
+        <div class="cyber-card purple" style="padding: 2.5rem; background: linear-gradient(135deg, var(--bg-card), #141224);">
+          
+          <!-- Encabezado de la Ficha -->
+          <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid var(--border-color); padding-bottom: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+            <div>
+              <h2 style="font-size: 1.8rem; color: var(--text-main);">{ad.person_name}</h2>
+              <span style="color: var(--text-muted); font-size: 0.9rem;">Cargo: <strong>{ad.role}</strong></span>
+            </div>
+            <div style="text-align: right;">
+              <span style="font-size: 0.75rem; background: var(--bg-dark); border: 1px solid var(--border-color); padding: 0.25rem 0.5rem; color: var(--neon-blue); font-family: monospace; font-weight: bold; text-transform: uppercase;">
+                {ad.party_slug.toUpperCase()}
+              </span>
+              <span style="color: var(--text-muted); font-size: 0.8rem; display: block; margin-top: 0.25rem;">Reg. {ad.date_declared}</span>
+            </div>
+          </div>
+
+          <!-- Detalles de Bienes y Deudas -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-bottom: 1.5rem;">
+            
+            <!-- Activos -->
+            <div style="background: rgba(57, 255, 20, 0.02); border: 1px solid rgba(57, 255, 20, 0.15); padding: 1.25rem; border-radius: 4px;">
+              <h3 style="color: var(--neon-green); font-size: 1.1rem; margin-bottom: 0.75rem; font-family: var(--font-title); display: flex; align-items: center; gap: 0.5rem;">
+                 Bienes y Activos
+              </h3>
+              <p style="font-size: 0.95rem; color: var(--text-main); line-height: 1.5; white-space: pre-wrap;">
+                {ad.declared_assets_summary}
+              </p>
+            </div>
+
+            <!-- Pasivos -->
+            <div style="background: rgba(255, 0, 127, 0.02); border: 1px solid rgba(255, 0, 127, 0.15); padding: 1.25rem; border-radius: 4px;">
+              <h3 style="color: var(--neon-rose); font-size: 1.1rem; margin-bottom: 0.75rem; font-family: var(--font-title); display: flex; align-items: center; gap: 0.5rem;">
+                💳 Préstamos y Deudas
+              </h3>
+              <p style="font-size: 0.95rem; color: var(--text-main); line-height: 1.5; white-space: pre-wrap;">
+                {ad.declared_debts_summary}
+              </p>
+            </div>
+
+          </div>
+
+          <!-- Pie de Ficha con Fuentes y Notas -->
+          <div style="border-top: 1px solid var(--border-color); padding-top: 1rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; font-size: 0.85rem; color: var(--text-muted);">
+            <div>
+              <strong>Nota técnica:</strong> {ad.notes}
+            </div>
+            {ad.source_url && (
+              <a href={ad.source_url} target="_blank" rel="noopener noreferrer" style="color: var(--neon-blue); text-decoration: underline; font-weight: bold;">
+                Ver ficha original en el Congreso ↗
+              </a>
+            )}
+          </div>
+
+        </div>
+      ))}
+    </div>
+
+    <!-- Advertencia Legal y Metodológica -->
+    <section class="cyber-card" style="margin-bottom: 4rem; background: var(--bg-card);">
+      <h3 style="font-size: 1.1rem; margin-bottom: 0.5rem; color: var(--text-main);">📌 Sobre la exactitud de estos datos</h3>
+      <p style="font-size: 0.9rem; color: var(--text-muted); line-height: 1.5;">
+        Estas fichas corresponden exclusivamente a las declaraciones de bienes y rentas firmadas por los propios diputados al inicio de la legislatura, tal y como obliga la Ley Orgánica del Régimen Electoral General (LOREG) y el reglamento del Congreso. MATIZA se limita a transcribir y estructurar la información declarada en los boletines oficiales sin evaluar valoraciones comerciales privadas de inmuebles ni especulaciones periodísticas externas.
+      </p>
+    </section>
+
+  </div>
+</Layout>

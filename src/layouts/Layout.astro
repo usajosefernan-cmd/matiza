@@ -1,0 +1,625 @@
+---
+import '../styles/global.css';
+import { getDatabase } from '../lib/db.js';
+import path from 'node:path';
+
+const { 
+  title = "MATIZA — Contexto para decidir", 
+  description = "Analiza noticias, vídeos y conversaciones. MATIZA detecta afirmaciones, compara fuentes y te ayuda a entender qué sabemos, qué falta y qué conviene preguntar.",
+  category,
+  activeNav = ''
+} = Astro.props;
+
+const db = getDatabase();
+
+
+
+const themes = db.prepare("SELECT * FROM themes ORDER BY orden").all() as any[];
+const topics = db.prepare("SELECT id, theme_id, title, slug FROM topics WHERE status = 'activo' ORDER BY title").all() as any[];
+
+const menuThemes = themes
+  .filter(theme => theme.slug !== 'desinformacion-y-bulos')
+  .map(theme => {
+    return {
+      ...theme,
+      topics: topics.filter(t => t.theme_id === theme.id)
+    };
+  });
+
+const rawCategories = db.prepare("SELECT DISTINCT category FROM topics WHERE status = 'activo'").all() as any[];
+const categories = rawCategories.map(c => {
+  const cat = c.category;
+  const slug = cat.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+  return { name: cat, slug };
+}).filter(c => c.name);
+
+db.close();
+
+const currentPath = Astro.url.pathname;
+
+const base = import.meta.env.BASE_URL;
+const getLink = (p) => {
+  const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base;
+  const cleanP = p.startsWith('/') ? p : '/' + p;
+  return cleanBase + cleanP;
+};
+---
+
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href={getLink('/favicon.svg')} />
+    <meta name="generator" content={Astro.generator} />
+    <title>{title === "MATIZA — Contexto para decidir" ? title : `${title} | MATIZA`}</title>
+    <meta name="description" content={description} />
+    <meta property="og:title" content={title === "MATIZA — Contexto para decidir" ? "MATIZA | Entiende lo que te están contando." : `${title} | MATIZA`} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title === "MATIZA — Contexto para decidir" ? "MATIZA | Entiende lo que te están contando." : `${title} | MATIZA`} />
+    <meta name="twitter:description" content={description} />
+  </head>
+  <body>
+    <!-- HEADER PREMI    <header style="border-bottom: 1px solid var(--border-color); background: rgba(7, 9, 19, 0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); position: sticky; top: 0; z-index: 1000; transition: all 0.3s ease;">
+      <div class="header-container" style="display: flex; align-items: center; justify-content: space-between; height: 64px; max-width: 1400px; margin: 0 auto; padding: 0 1.5rem; width: 100%;">
+        
+        <!-- Logo (Bloque Izquierdo) -->
+        <div style="flex: 1; display: flex; align-items: center; justify-content: flex-start;">
+          <a href={getLink('/')} style="text-decoration: none; display: flex; align-items: center; gap: 0.5rem;">
+            <span style="font-family: var(--font-title); font-weight: 900; font-size: 1.55rem; letter-spacing: -0.04em; color: #ffffff; text-transform: uppercase;">
+              MATIZA
+            </span>
+          </a>
+        </div>
+
+        <!-- Desktop Navigation (Bloque Central Centrado) -->
+        <nav style="display: flex; align-items: center; gap: 1.2rem; justify-content: center;" class="desktop-nav">
+          
+          <!-- 1. Última Hora (primero y en rojo) -->
+          <a href={getLink('/actualidad')} class="nav-link" style="font-size: 0.78rem; color: var(--neon-rose) !important; text-decoration: none; font-weight: 800; font-family: var(--font-title); white-space: nowrap; display: flex; align-items: center; gap: 0.35rem;">
+            <span class="pulse-icon" style="background-color: var(--neon-rose); box-shadow: 0 0 6px var(--neon-rose); margin-right: 0;"></span>
+            ÚLTIMA HORA
+          </a>
+
+          <!-- 2. Radar Interceptor (Core) - Solo SVG -->
+          <a href={getLink('/interceptor')} class="radar-icon-link" style="display: flex; align-items: center; justify-content: center; text-decoration: none; padding: 0.4rem; transition: opacity 0.2s;" title="Radar Interceptor de Bulos">
+            <svg class="radar-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 18px; height: 18px; color: var(--neon-blue); filter: drop-shadow(0 0 4px var(--neon-blue)); transition: transform 0.2s;">
+              <circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle>
+              <circle cx="12" cy="12" r="6" stroke-opacity="0.4"></circle>
+              <circle cx="12" cy="12" r="2" stroke-opacity="0.8"></circle>
+              <line class="radar-line" x1="12" y1="12" x2="12" y2="2" style="transform-origin: 12px 12px; animation: radar-sweep 3s linear infinite;"></line>
+            </svg>
+          </a>
+
+          <!-- 3. Dropdowns dinámicos por Tema (Explora) -->
+          <div class="nav-dropdown" style="position: relative; display: inline-block;">
+            <a href={getLink('/temas')} class="nav-link dropdown-toggle" style="font-size: 0.78rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.25rem; text-decoration: none; font-weight: 700; font-family: var(--font-title); white-space: nowrap;">
+              EXPLORA <span style="font-size: 0.55rem; transition: transform 0.25s ease; display: inline-block;">▼</span>
+            </a>
+            <div class="dropdown-menu left-align" style="opacity: 0; transform: translateY(10px); pointer-events: none; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); background: rgba(7, 9, 19, 0.95); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0px 8px 32px rgba(0, 240, 255, 0.15); min-width: 280px; max-height: 400px; overflow-y: auto; z-index: 1000; padding: 0.75rem 0; margin-top: 0.5rem; backdrop-filter: blur(20px); transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);">
+              <span style="display: block; padding: 0.2rem 1.25rem; font-size: 0.6rem; font-family: monospace; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid rgba(255,255,255,0.04); padding-bottom: 0.4rem; margin-bottom: 0.4rem;">EXPEDIENTES ACTIVOS</span>
+              {menuThemes.map((theme) => (
+                <div class="nested-dropdown-group" style="padding: 0.15rem 0;">
+                  <span style="display: block; padding: 0.25rem 1.25rem; font-size: 0.65rem; text-transform: uppercase; color: var(--neon-blue); font-weight: 800; font-family: var(--font-title); letter-spacing: 0.05em;">{theme.name}</span>
+                  {theme.topics.slice(0, 4).map((t) => (
+                    <a href={getLink(`/tema/${t.slug}`)} style="display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 1.55rem; color: var(--text-muted); text-decoration: none; font-size: 0.75rem; font-weight: 600; font-family: var(--font-title); transition: all 0.2s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title={t.title}>
+                      <span style="width: 4px; height: 4px; border-radius: 50%; background: rgba(255,255,255,0.15); flex-shrink: 0;"></span>
+                      {t.title}
+                    </a>
+                  ))}
+                </div>
+              ))}
+              <a href={getLink('/temas')} style="display: block; text-align: center; padding: 0.6rem 0; font-size: 0.72rem; font-weight: bold; color: var(--neon-blue) !important; background: rgba(0, 240, 255, 0.02); border-top: 1px solid rgba(255,255,255,0.03); margin-top: 0.4rem;">VER TODOS LOS TEMAS →</a>
+            </div>
+          </div>
+
+          <!-- 4. Dropdown Política (Explicado con subtítulos) -->
+          <div class="nav-dropdown" style="position: relative; display: inline-block;">
+            <a href={getLink('/comparador-politico')} class="nav-link dropdown-toggle" style="font-size: 0.78rem; display: flex; align-items: center; gap: 0.25rem; text-decoration: none; font-weight: 700; font-family: var(--font-title); white-space: nowrap;">
+              POLÍTICA <span style="font-size: 0.55rem; transition: transform 0.25s ease; display: inline-block;">▼</span>
+            </a>
+            <div class="dropdown-menu" style="opacity: 0; transform: translateY(10px) translateX(-50%); pointer-events: none; position: absolute; top: 100%; left: 50%; background: rgba(7, 9, 19, 0.95); border: 1px solid var(--border-color); border-radius: 12px; box-shadow: 0px 8px 32px rgba(0, 240, 255, 0.15); min-width: 320px; z-index: 1000; padding: 0.85rem; margin-top: 0.5rem; backdrop-filter: blur(20px); transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); display: flex; flex-direction: column; gap: 0.5rem;">
+              <span style="font-size: 0.6rem; font-family: monospace; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid rgba(255,255,255,0.04); padding-bottom: 0.4rem; margin-bottom: 0.25rem;">VERIFICACIÓN ELECTORAL</span>
+              
+              <a href={getLink('/comparador-politico')} style="display: flex; flex-direction: column; gap: 0.15rem; padding: 0.5rem; border-radius: 6px; text-decoration: none; transition: background 0.2s;">
+                <span style="font-size: 0.8rem; font-weight: 700; color: #fff; font-family: var(--font-title);">Comparador de Hechos</span>
+                <span style="font-size: 0.65rem; color: var(--text-muted); line-height: 1.35;">Auditoría lingüística de debates y declaraciones públicas.</span>
+              </a>
+              
+              <a href={getLink('/programas-politicos')} style="display: flex; flex-direction: column; gap: 0.15rem; padding: 0.5rem; border-radius: 6px; text-decoration: none; transition: background 0.2s;">
+                <span style="font-size: 0.8rem; font-weight: 700; color: #fff; font-family: var(--font-title);">Programas Electorales</span>
+                <span style="font-size: 0.65rem; color: var(--text-muted); line-height: 1.35;">Contraste riguroso de promesas frente a medidas reales.</span>
+              </a>
+
+              <a href={getLink('/bienes-declarados')} style="display: flex; flex-direction: column; gap: 0.15rem; padding: 0.5rem; border-radius: 6px; text-decoration: none; transition: background 0.2s;">
+                <span style="font-size: 0.8rem; font-weight: 700; color: #fff; font-family: var(--font-title);">Bienes y Patrimonios</span>
+                <span style="font-size: 0.65rem; color: var(--text-muted); line-height: 1.35;">Historial oficial y evolución patrimonial de cargos electos.</span>
+              </a>
+            </div>
+          </div>
+
+          <!-- Separador sutil vertical -->
+          <span style="width: 1px; height: 16px; background: rgba(255, 255, 255, 0.12);" class="nav-separator"></span>
+
+          <!-- 5. Enlaces de Labs Independientes -->
+          <a href={getLink('/justicia')} class="nav-link" style="font-size: 0.78rem; text-decoration: none; font-weight: 700; font-family: var(--font-title); white-space: nowrap; display: flex; align-items: center; gap: 0.25rem;">
+            JUSTICIA <span style="font-family: monospace; font-size: 0.55rem; color: rgba(255,255,255,0.4); text-transform: uppercase;">[SOON]</span>
+          </a>
+
+          <a href={getLink('/consumo')} class="nav-link" style="font-size: 0.78rem; text-decoration: none; font-weight: 700; font-family: var(--font-title); white-space: nowrap; display: flex; align-items: center; gap: 0.25rem;">
+            CONSUMO <span style="font-family: monospace; font-size: 0.55rem; color: rgba(255,255,255,0.4); text-transform: uppercase;">[SOON]</span>
+          </a>
+
+          <a href={getLink('/live')} class="nav-link" style="font-size: 0.78rem; text-decoration: none; font-weight: 700; font-family: var(--font-title); white-space: nowrap; display: flex; align-items: center; gap: 0.25rem;">
+            LIVE <span style="font-family: monospace; font-size: 0.55rem; color: var(--neon-purple); text-transform: uppercase;">[BETA]</span>
+          </a>
+
+          <a href={getLink('/pro')} class="nav-link" style="font-size: 0.78rem; text-decoration: none; font-weight: 800; font-family: var(--font-title); white-space: nowrap; color: #ffd700 !important; display: flex; align-items: center; gap: 0.25rem;">
+            PRO <span style="font-family: monospace; font-size: 0.55rem; color: #ffd700; text-transform: uppercase;">[PREMIUM]</span>
+          </a>
+
+        </nav>
+
+        <!-- Buscador e Icono Admin (Bloque Derecho) -->
+        <div style="flex: 1; display: flex; align-items: center; justify-content: flex-end; gap: 1rem;" class="desktop-nav">
+          <a href={getLink('/buscador')} class="nav-link" style="padding: 0.25rem; display: flex; align-items: center;" title="Buscador Inteligente">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-muted);"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </a>
+
+          <span style="width: 1px; height: 16px; background: rgba(255, 255, 255, 0.12);" class="nav-separator"></span>
+
+          <a href={getLink('/admin')} class="admin-icon-link" style="display: flex; align-items: center; justify-content: center; text-decoration: none; transition: opacity 0.2s; padding: 0.25rem;" title="Panel de Administración">
+            <svg class="admin-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 18px; height: 18px; color: var(--neon-purple); filter: drop-shadow(0 0 4px rgba(157, 78, 221, 0.4));">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path class="admin-gear" d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68 1.65 1.65 0 0 0 10 3.17V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.32 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" style="transform-origin: 12px 12px; transition: transform 0.8s ease;"></path>
+            </svg>
+          </a>
+        </div>
+
+        <!-- Hamburguesa móvil (con Buscador) -->
+        <div style="display: flex; align-items: center; gap: 0.5rem;" class="mobile-nav-toggle">
+          <a href={getLink('/buscador')} style="color: var(--text-muted); padding: 0.4rem; display: flex; align-items: center; justify-content: center;" title="Buscador">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </a>
+          <button class="hamburger-btn" id="drawer-open-btn" aria-label="Abrir menú">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- DRAWER LATERAL (MÓVIL) -->
+    <div class="drawer-overlay" id="drawer-overlay"></div>
+    <div class="drawer-panel" id="drawer-panel">
+      <div class="drawer-header" style="border-bottom: 1px solid var(--border-color); padding: 1.25rem 1.5rem;">
+        <span style="font-family: var(--font-title); font-weight: 900; font-size: 1.3rem; text-transform: uppercase; color: #ffffff; letter-spacing: -0.02em;">
+          MATIZA
+        </span>
+        <button class="drawer-close" id="drawer-close-btn" aria-label="Cerrar menú">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <nav class="drawer-nav" style="padding-bottom: 3rem; display: flex; flex-direction: column; gap: 1rem;">
+        
+        <!-- Acceso Rápido en Grid Táctil Premium Brutalista -->
+        <span class="drawer-section-title" style="padding-top: 0.5rem; padding-left: 1.5rem; font-size: 0.65rem; font-weight: 800; color: var(--text-muted); letter-spacing: 0.05em;">MÓDULOS PRINCIPALES</span>
+        <div class="drawer-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; padding: 0 1.5rem;">
+          <a href={getLink('/interceptor')} class="drawer-card" style="display: flex; flex-direction: column; justify-content: space-between; height: 60px; padding: 0.85rem; background: rgba(0, 240, 255, 0.02); border: 1px solid rgba(0, 240, 255, 0.15); border-radius: 8px; text-decoration: none; color: #fff; transition: all 0.25s;">
+            <span style="font-size: 0.55rem; font-family: monospace; color: var(--neon-blue);">[ MOD-01 ]</span>
+            <span style="font-size: 0.72rem; font-weight: 800; font-family: var(--font-title); text-transform: uppercase; letter-spacing: 0.02em;">Radar</span>
+          </a>
+          <a href={getLink('/actualidad')} class="drawer-card" style="display: flex; flex-direction: column; justify-content: space-between; height: 60px; padding: 0.85rem; background: rgba(255, 51, 102, 0.02); border: 1px solid rgba(255, 51, 102, 0.15); border-radius: 8px; text-decoration: none; color: #fff; transition: all 0.25s;">
+            <span style="font-size: 0.55rem; font-family: monospace; color: var(--neon-rose);">[ MOD-02 ]</span>
+            <span style="font-size: 0.72rem; font-weight: 800; font-family: var(--font-title); text-transform: uppercase; letter-spacing: 0.02em; color: var(--neon-rose);">En Vivo</span>
+          </a>
+          <a href={getLink('/temas')} class="drawer-card" style="display: flex; flex-direction: column; justify-content: space-between; height: 60px; padding: 0.85rem; background: rgba(255, 255, 255, 0.01); border: 1px solid var(--border-color); border-radius: 8px; text-decoration: none; color: #fff; transition: all 0.25s;">
+            <span style="font-size: 0.55rem; font-family: monospace; color: var(--text-muted);">[ MOD-03 ]</span>
+            <span style="font-size: 0.72rem; font-weight: 800; font-family: var(--font-title); text-transform: uppercase; letter-spacing: 0.02em;">Explora</span>
+          </a>
+          <a href={getLink('/comparador-politico')} class="drawer-card" style="display: flex; flex-direction: column; justify-content: space-between; height: 60px; padding: 0.85rem; background: rgba(255, 255, 255, 0.01); border: 1px solid var(--border-color); border-radius: 8px; text-decoration: none; color: #fff; transition: all 0.25s;">
+            <span style="font-size: 0.55rem; font-family: monospace; color: var(--text-muted);">[ MOD-04 ]</span>
+            <span style="font-size: 0.72rem; font-weight: 800; font-family: var(--font-title); text-transform: uppercase; letter-spacing: 0.02em;">Política</span>
+          </a>
+        </div>
+
+        <!-- Secciones Temáticas -->
+        <span class="drawer-section-title" style="padding: 0 1.5rem; font-size: 0.65rem; font-weight: 800; color: var(--text-muted); letter-spacing: 0.05em;">TEMAS Y EXPEDIENTES</span>
+        <div style="padding: 0 1.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
+          {menuThemes.map((theme) => (
+            <details style="width: 100%; border-bottom: 1px solid rgba(255,255,255,0.02); padding-bottom: 0.5rem;">
+              <summary style="display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0; color: #fff; font-size: 0.8rem; font-weight: bold; cursor: pointer; list-style: none;">
+                <span>{theme.name.toUpperCase()}</span>
+                <span style="font-size: 0.55rem; color: var(--neon-blue);">▼</span>
+              </summary>
+              <div style="padding-left: 0.75rem; border-left: 1px solid var(--border-color); margin-top: 0.25rem; display: flex; flex-direction: column; gap: 0.25rem;">
+                {theme.topics.map((t) => (
+                  <a href={getLink(`/tema/${t.slug}`)} style="font-size: 0.78rem; color: var(--text-muted); text-decoration: none; padding: 0.35rem 0; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    {t.title}
+                  </a>
+                ))}
+              </div>
+            </details>
+          ))}
+        </div>
+
+        <!-- Laboratorios y Próximos Módulos -->
+        <span class="drawer-section-title" style="padding: 0 1.5rem; font-size: 0.65rem; font-weight: 800; color: var(--text-muted); letter-spacing: 0.05em;">LABORATORIOS & BETA</span>
+        <div style="display: flex; flex-direction: column; gap: 0.65rem; padding: 0 1.5rem;">
+          <a href={getLink('/justicia')} style="display: flex; align-items: center; justify-content: space-between; text-decoration: none; padding: 0.25rem 0; opacity: 0.85; transition: opacity 0.2s;">
+            <span style="font-size: 0.78rem; font-weight: 600; color: #fff; font-family: var(--font-title);">MATIZA JUSTICIA</span>
+            <span style="font-size: 0.55rem; font-weight: 800; font-family: monospace; color: rgba(255,255,255,0.4); text-transform: uppercase;">[SOON]</span>
+          </a>
+
+          <a href={getLink('/consumo')} style="display: flex; align-items: center; justify-content: space-between; text-decoration: none; padding: 0.25rem 0; opacity: 0.85; transition: opacity 0.2s;">
+            <span style="font-size: 0.78rem; font-weight: 600; color: #fff; font-family: var(--font-title);">MATIZA CONSUMO</span>
+            <span style="font-size: 0.55rem; font-weight: 800; font-family: monospace; color: rgba(255,255,255,0.4); text-transform: uppercase;">[SOON]</span>
+          </a>
+
+          <a href={getLink('/live')} style="display: flex; align-items: center; justify-content: space-between; text-decoration: none; padding: 0.25rem 0; opacity: 0.85; transition: opacity 0.2s;">
+            <span style="font-size: 0.78rem; font-weight: 600; color: #fff; font-family: var(--font-title);">MATIZA LIVE</span>
+            <span style="font-size: 0.55rem; font-weight: 800; font-family: monospace; color: var(--neon-purple); text-transform: uppercase;">[BETA]</span>
+          </a>
+
+          <a href={getLink('/pro')} style="display: flex; align-items: center; justify-content: space-between; text-decoration: none; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 0.6rem; opacity: 0.85; transition: opacity 0.2s;">
+            <span style="font-size: 0.78rem; font-weight: 800; color: #ffd700; font-family: var(--font-title);">MATIZA PRO</span>
+            <span style="font-size: 0.55rem; font-weight: 800; font-family: monospace; color: #ffd700; text-transform: uppercase;">[PREMIUM]</span>
+          </a>
+        </div>
+
+        <a href={getLink('/admin')} style="display: flex; align-items: center; gap: 0.5rem; padding: 0.75rem 1.5rem; color: rgba(255,255,255,0.4); font-weight: 800; font-size: 0.75rem; text-transform: uppercase; border-top: 1px solid rgba(255, 255, 255, 0.06); margin-top: 1rem; text-decoration: none; font-family: var(--font-title); letter-spacing: 0.05em;">
+          ADMINISTRACIÓN
+        </a>
+      </nav>
+    </div>
+
+    <!-- 📱 BOTTOM NAV (MÓVIL) 📱 -->
+    <div class="bottom-nav-container">
+      <nav class="bottom-nav">
+        <!-- 1. En Vivo / Actualidad -->
+        <a href={getLink('/actualidad')} class={`bottom-nav-item ${currentPath.includes('/actualidad') ? 'active' : ''}`} style="color: var(--neon-rose) !important;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" style="color: var(--neon-rose); width: 20px; height: 20px;">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+          </svg>
+          <span style="font-size: 0.58rem;">Última Hora</span>
+        </a>
+
+        <!-- 2. Explora Temas -->
+        <a href={getLink('/temas')} class={`bottom-nav-item ${currentPath.includes('/tema') || currentPath.includes('/temas') ? 'active' : ''}`}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" style="width: 20px; height: 20px;">
+            <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+            <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+          </svg>
+          <span style="font-size: 0.58rem;">Explora</span>
+        </a>
+
+        <!-- 3. RADAR (FAB CENTRAL FLOTANTE) -->
+        <a href={getLink('/interceptor')} class="bottom-nav-fab" title="Auditar Link en Radar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle>
+            <circle cx="12" cy="12" r="6" stroke-opacity="0.4"></circle>
+            <circle cx="12" cy="12" r="2" stroke-opacity="0.8"></circle>
+            <line x1="12" y1="12" x2="12" y2="2" style="transform-origin: 12px 12px; animation: radar-sweep 2.5s linear infinite;"></line>
+          </svg>
+        </a>
+
+        <!-- 4. Política y Urna -->
+        <a href={getLink('/comparador-politico')} class={`bottom-nav-item ${currentPath.includes('/comparador') ? 'active' : ''}`}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" style="width: 20px; height: 20px;">
+            <path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="9"/>
+          </svg>
+          <span style="font-size: 0.58rem;">Política</span>
+        </a>
+
+        <!-- 5. Menú Hamburguesa Drawer -->
+        <button id="bottom-nav-drawer-btn" class="bottom-nav-item" style="background: none; border: none; cursor: pointer; color: var(--text-muted);">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" style="width: 20px; height: 20px;">
+            <line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+          <span style="font-size: 0.58rem;">Menú</span>
+        </button>
+      </nav>
+    </div>
+
+    <main style="min-height: calc(100vh - 150px);">
+      <slot />
+    </main>
+
+    <!-- FOOTER PREMIUM AMPLIADO -->
+    <footer style="border-top: 1px solid var(--border-color); background: rgba(7, 9, 19, 0.85); backdrop-filter: blur(20px); padding: 4rem 0 3rem 0; font-size: 0.8rem; color: var(--text-muted);">
+      <div class="container" style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 2.5rem; max-width: 1000px;">
+        
+        <div>
+          <h3 style="color: var(--text-main); font-size: 1.25rem; margin-bottom: 0.75rem; letter-spacing: -0.03em; text-transform: uppercase; font-family: var(--font-title); font-weight: 900;">
+            MATIZA
+          </h3>
+          <p style="margin-bottom: 1.25rem; font-size: 0.85rem; font-weight: 700; color: #ffffff; line-height: 1.4;">
+            Contexto para decidir.
+          </p>
+          <p style="font-size: 0.72rem; line-height: 1.45; margin-bottom: 1.5rem; max-width: 320px; color: var(--text-muted);">
+            MATIZA utiliza inteligencia artificial y fuentes externas para ayudar a analizar información. Sus resultados pueden contener errores y no sustituyen asesoramiento profesional, jurídico, médico o financiero.
+          </p>
+          <p style="font-size: 0.7rem; color: var(--text-muted);">© {new Date().getFullYear()} Matiza Labs. Todos los derechos reservados.</p>
+        </div>
+
+        <div>
+          <h4 style="color: var(--text-main); font-size: 0.85rem; margin-bottom: 1rem; font-family: var(--font-title); font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;">Plataforma</h4>
+          <ul style="list-style: none; display: flex; flex-direction: column; gap: 0.6rem; padding: 0;" class="footer-links">
+            <li><a href={getLink('/')}>Radar</a></li>
+            <li><a href={getLink('/#live')}>Live</a></li>
+            <li><a href={getLink('/temas')}>Explora</a></li>
+            <li><a href={getLink('/pro')}>MATIZA Pro</a></li>
+          </ul>
+        </div>
+
+        <div>
+          <h4 style="color: var(--text-main); font-size: 0.85rem; margin-bottom: 1rem; font-family: var(--font-title); font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;">Especiales</h4>
+          <ul style="list-style: none; display: flex; flex-direction: column; gap: 0.6rem; padding: 0;" class="footer-links">
+            <li><a href={getLink('/comparador-politico')}>Política</a></li>
+            <li><a href={getLink('/justicia')}>Justicia</a></li>
+            <li><a href={getLink('/consumo')}>Consumo</a></li>
+            <li><a href={getLink('/metodologia')}>Metodología</a></li>
+          </ul>
+        </div>
+
+        <div>
+          <h4 style="color: var(--text-main); font-size: 0.85rem; margin-bottom: 1rem; font-family: var(--font-title); font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;">Transparencia y Legal</h4>
+          <ul style="list-style: none; display: flex; flex-direction: column; gap: 0.6rem; padding: 0;" class="footer-links">
+            <li><a href={getLink('/fuentes')}>Fuentes</a></li>
+            <li><a href={getLink('/correcciones')}>Correcciones</a></li>
+            <li><a href={getLink('/privacidad')}>Privacidad</a></li>
+            <li><a href={getLink('/terminos')}>Términos</a></li>
+            <li><a href={getLink('/contacto')}>Contacto</a></li>
+          </ul>
+        </div>
+
+      </div>
+    </footer>
+
+    <!-- Botón Subir Arriba flotante con flecha limpia -->
+    <button id="back-to-top" class="back-to-top-btn" aria-label="Subir arriba">
+      ↑
+    </button>
+
+    <!-- Script del Drawer y Botón Volver Arriba -->
+    <script is:inline>
+      const openBtn = document.getElementById('drawer-open-btn');
+      const bottomNavDrawerBtn = document.getElementById('bottom-nav-drawer-btn');
+      const closeBtn = document.getElementById('drawer-close-btn');
+      const overlay = document.getElementById('drawer-overlay');
+      const panel = document.getElementById('drawer-panel');
+      const backToTopBtn = document.getElementById('back-to-top');
+
+      function openDrawer() {
+        overlay.classList.add('open');
+        panel.classList.add('open');
+        document.body.style.overflow = 'hidden';
+      }
+      function closeDrawer() {
+        overlay.classList.remove('open');
+        panel.classList.remove('open');
+        document.body.style.overflow = '';
+      }
+
+      if (openBtn) openBtn.addEventListener('click', openDrawer);
+      if (bottomNavDrawerBtn) bottomNavDrawerBtn.addEventListener('click', openDrawer);
+      if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
+      if (overlay) overlay.addEventListener('click', closeDrawer);
+
+      // Lógica de botón flotante "subir arriba"
+      if (backToTopBtn) {
+        window.addEventListener('scroll', () => {
+          if (window.scrollY > 300) {
+            backToTopBtn.classList.add('visible');
+          } else {
+            backToTopBtn.classList.remove('visible');
+          }
+        });
+        backToTopBtn.addEventListener('click', () => {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+      }
+    </script>
+  </body>
+</html>
+
+<style>
+  @keyframes radar-sweep {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  .admin-icon-link:hover .admin-gear {
+    transform: rotate(180deg) !important;
+  }
+  .radar-icon-link:hover .radar-svg {
+    transform: scale(1.1);
+  }
+  
+  .mobile-nav-toggle {
+    display: none !important;
+  }
+  
+  @media (max-width: 1024px) {
+    .desktop-nav {
+      display: none !important;
+    }
+    .mobile-nav-toggle {
+      display: flex !important;
+    }
+  }
+  .nav-link {
+    font-family: var(--font-title);
+    font-weight: 600;
+    transition: color 0.2s ease;
+    padding: 0.25rem 0;
+    border-bottom: 2px solid transparent;
+  }
+  .nav-link:hover {
+    color: var(--neon-blue);
+    border-bottom-color: var(--neon-blue);
+  }
+  
+  /* Dropdowns modernos con transiciones fluidas de opacidad y escala */
+  .nav-dropdown:hover .dropdown-menu { 
+    opacity: 1 !important;
+    transform: translateY(0) !important;
+    pointer-events: auto !important;
+  }
+  .nav-dropdown:hover .dropdown-menu.left-align { 
+    opacity: 1 !important;
+    transform: translateY(0) !important;
+    pointer-events: auto !important;
+  }
+  
+  .nav-dropdown:hover .dropdown-toggle span { 
+    transform: rotate(180deg); 
+    color: var(--neon-blue); 
+  }
+  
+  .dropdown-menu a:hover { 
+    color: var(--neon-blue) !important; 
+    background: rgba(0, 240, 255, 0.05); 
+  }
+  
+  .footer-links a { 
+    color: var(--text-muted); 
+    text-decoration: none; 
+    transition: color 0.2s ease; 
+  }
+  .footer-links a:hover { 
+    color: var(--neon-blue) !important; 
+  }
+
+  /* Sobrescribir Bottom Nav para ser flotante y premium (Mobile First) */
+  @media (max-width: 899px) {
+    .bottom-nav {
+      bottom: 12px !important;
+      left: 12px !important;
+      right: 12px !important;
+      border-radius: 16px !important;
+      border: 1px solid rgba(255, 255, 255, 0.08) !important;
+      background: rgba(7, 9, 19, 0.78) !important;
+      backdrop-filter: blur(16px) !important;
+      -webkit-backdrop-filter: blur(16px) !important;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+      height: 62px !important;
+      padding-bottom: 0 !important;
+      overflow: visible !important; /* Permite que el FAB sobresalga */
+    }
+    
+    .bottom-nav-item {
+      height: 100% !important;
+      width: 20% !important;
+      display: flex !important;
+      flex-direction: column !important;
+      align-items: center !important;
+      justify-content: center !important;
+      gap: 2px !important;
+      transition: all 0.2s ease !important;
+    }
+
+    .bottom-nav-item.active {
+      color: var(--neon-blue) !important;
+      text-shadow: 0 0 8px rgba(0, 240, 255, 0.4);
+    }
+    
+    .bottom-nav-item.active::before {
+      display: none !important; /* Desactivar línea aburrida superior */
+    }
+    
+    /* Radar FAB Central */
+    .bottom-nav-fab {
+      position: relative !important;
+      top: -16px !important; /* Sobresale */
+      background: linear-gradient(135deg, #00f0ff, #9d4edd) !important;
+      border: 4px solid rgba(7, 9, 19, 1) !important;
+      width: 54px !important;
+      height: 54px !important;
+      border-radius: 50% !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      box-shadow: 0 8px 24px rgba(0, 240, 255, 0.4), 0 0 0 2px rgba(255, 255, 255, 0.05) !important;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+      z-index: 10 !important;
+      flex-shrink: 0 !important;
+    }
+    
+    .bottom-nav-fab svg {
+      color: #ffffff !important;
+      width: 24px !important;
+      height: 24px !important;
+      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)) !important;
+    }
+    
+    .bottom-nav-fab::after {
+      content: '';
+      position: absolute;
+      inset: -4px;
+      border-radius: 50%;
+      border: 1px solid var(--neon-blue);
+      animation: fab-pulse 2.2s infinite;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    @keyframes fab-pulse {
+      0% {
+        transform: scale(1);
+        opacity: 0.6;
+      }
+      100% {
+        transform: scale(1.35);
+        opacity: 0;
+      }
+    }
+    
+    .bottom-nav-fab:active {
+      transform: scale(0.9) translateY(2px) !important;
+      box-shadow: 0 4px 12px rgba(0, 240, 255, 0.3) !important;
+    }
+  }
+
+  /* Estilos del botn flotante Subir Arriba */
+  .back-to-top-btn {
+    position: fixed;
+    bottom: 85px; /* Por encima de la barra inferior en mvil */
+    right: 20px;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(7, 9, 19, 0.9);
+    border: 1px solid var(--border-color);
+    color: var(--neon-blue);
+    font-size: 1rem;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 998;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(10px);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .back-to-top-btn.visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+  .back-to-top-btn:hover {
+    border-color: var(--neon-blue);
+    box-shadow: 0 0 12px rgba(0, 240, 255, 0.3);
+    color: #fff;
+  }
+  @media (min-width: 900px) {
+    .back-to-top-btn {
+      bottom: 25px; /* En escritorio no hay barra inferior */
+    }
+  }
+</style>

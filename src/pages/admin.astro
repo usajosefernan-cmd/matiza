@@ -1,0 +1,2100 @@
+---
+export const prerender = true;
+import Layout from '../layouts/Layout.astro';
+import { getDatabase } from '../lib/db.js';
+import path from 'node:path';
+import fs from 'node:fs';
+import { analyzeUrl } from '../../scripts/check-url.js';
+import { execSync, exec } from 'node:child_process';
+import DashboardPanel from '../components/admin/DashboardPanel.astro';
+import AprobacionPanel from '../components/admin/AprobacionPanel.astro';
+import TriagePanel from '../components/admin/TriagePanel.astro';
+import MotorPanel from '../components/admin/MotorPanel.astro';
+import RedactorPanel from '../components/admin/RedactorPanel.astro';
+
+const baseRoute = Astro.url.pathname.includes('/pro/matiza') ? '/pro/matiza' : '/';
+const cleanBase = baseRoute.endsWith('/') ? baseRoute.slice(0, -1) : baseRoute;
+
+let message = '';
+let messageType = 'info';
+let urlCheckResult = null;
+let commandOutput = '';
+
+// Obtener la pestaña activa
+const currentTab = Astro.url.searchParams.get('tab') || 'aprobacion';
+
+// Manejo de peticiones POST (acciones de administración)
+if (Astro.request.method === 'POST') {
+  try {
+    const data = await Astro.request.formData();
+    const action = data.get('action')?.toString() || '';
+
+        const db = getDatabase();
+    db.exec('PRAGMA foreign_keys = ON;');
+
+    if (action === 'approve') {
+      const articleId = data.get('article_id')?.toString() || '';
+
+      // Actualizar artículo a publicado
+      db.prepare(`
+        UPDATE articles
+        SET status = 'publicado', published_at = datetime('now'), human_review_required = 0
+        WHERE id = ?
+      `).run(articleId);
+
+      // Actualizar posts sociales asociados a programado
+      db.prepare(`
+        UPDATE social_posts
+        SET status = 'programado', scheduled_at = datetime('now')
+        WHERE article_id = ?
+      `).run(articleId);
+
+      message = `✓ Artículo aprobado y publicado exitosamente en el feed de noticias.`;
+      messageType = 'success';
+    }
+    else if (action === 'reject') {
+      const articleId = data.get('article_id')?.toString() || '';
+
+      db.prepare("UPDATE articles SET status = 'rechazado' WHERE id = ?").run(articleId);
+
+      message = `✗ Artículo rechazado y movido a la papelera.`;
+      messageType = 'error';
+    }
+    else if (action === 'edit_article') {
+      const articleId = data.get('article_id')?.toString() || '';
+      const title = data.get('title')?.toString() || '';
+      const subtitle = data.get('subtitle')?.toString() || '';
+      const verdict = data.get('verdict')?.toString() || '';
+      const explanation = data.get('explanation')?.toString() || '';
+      const whatIsTrue = data.get('what_is_true')?.toString() || '';
+      const whatIsFalse = data.get('what_is_false')?.toString() || '';
+      const whatLacksContext = data.get('what_lacks_context')?.toString() || '';
+      const whatIsNotProven = data.get('what_is_not_proven')?.toString() || '';
+      const topicId = data.get('topic_id')?.toString() || '';
+      const status = data.get('status')?.toString() || 'borrador';
+      const trickUsed = data.get('trick_used')?.toString() || 'dato sin base';
+      const matizaScore = parseInt(data.get('matiza_score')?.toString() || '50', 10);
+      const emojiTag = data.get('emoji_tag')?.toString() || '🧊 Falta contexto';
+      const tagsStr = data.get('tags')?.toString() || '';
+
+      const originDate = data.get('origin_date')?.toString() || new Date().toISOString();
+
+      // Si el estado cambia a publicado, forzar published_at y apagar human_review_required
+      if (status === 'publicado') {
+        db.prepare(`
+          UPDATE articles
+          SET title = ?, subtitle = ?, verdict = ?, explanation = ?,
+              what_is_true = ?, what_is_false = ?, what_lacks_context = ?, what_is_not_proven = ?,
+              topic_id = ?, status = ?, published_at = COALESCE(published_at, datetime('now')), human_review_required = 0,
+              origin_date = ?, trick_used = ?, matiza_score = ?, emoji_tag = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(title, subtitle, verdict, explanation, whatIsTrue, whatIsFalse, whatLacksContext, whatIsNotProven, topicId, status, originDate, trickUsed, matizaScore, emojiTag, articleId);
+      } else {
+        db.prepare(`
+          UPDATE articles
+          SET title = ?, subtitle = ?, verdict = ?, explanation = ?,
+              what_is_true = ?, what_is_false = ?, what_lacks_context = ?, what_is_not_proven = ?,
+              topic_id = ?, status = ?, origin_date = ?, trick_used = ?, matiza_score = ?, emoji_tag = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(title, subtitle, verdict, explanation, whatIsTrue, whatIsFalse, whatLacksContext, whatIsNotProven, topicId, status, originDate, trickUsed, matizaScore, emojiTag, articleId);
+      }
+
+      // Actualizar tags asociados
+      db.prepare("DELETE FROM article_tags WHERE article_id = ?").run(articleId);
+      if (tagsStr.trim()) {
+        const tags = tagsStr.split(',').map(t => t.trim()).filter(Boolean);
+        const insertTag = db.prepare("INSERT OR IGNORE INTO tags (id, slug, name) VALUES (?, ?, ?)");
+        const insertArticleTag = db.prepare("INSERT OR IGNORE INTO article_tags (article_id, tag_id) VALUES (?, ?)");
+        tags.forEach(t => {
+          const slug = t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+          let existing = db.prepare("SELECT id FROM tags WHERE slug = ?").get(slug) as any;
+          let tagId;
+          if (existing) {
+            tagId = existing.id;
+          } else {
+            tagId = `tag-manual-${Date.now()}-${Math.floor(Math.random() * 100)}`;
+            insertTag.run(tagId, slug, t);
+          }
+          insertArticleTag.run(articleId, tagId);
+        });
+      }
+
+      message = `✓ Artículo "${title.substring(0, 45)}..." actualizado correctamente.`;
+      messageType = 'success';
+    }
+    else if (action === 'save_pipeline_config') {
+      try {
+        const configPath = path.resolve('pipeline_config.json');
+        let currentConfig: any = { global: {}, phases: {} };
+        if (fs.existsSync(configPath)) {
+          try {
+            currentConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+          } catch (e) {}
+        }
+
+        // Actualizar parámetros globales
+        currentConfig.global = {
+          default_provider: data.get('global_provider')?.toString() || 'gemini',
+          fallback_provider: data.get('fallback_provider')?.toString() || 'nous',
+          fallback_model: data.get('fallback_model')?.toString() || 'stepfun/step-3.7-flash:free',
+          timeout_ms: parseInt(data.get('global_timeout')?.toString() || '180000', 10),
+          autopilot: data.get('autopilot')?.toString() === 'true'
+        };
+
+        // Iterar sobre las 12 fases
+        const phasesList = ['00', '01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11'];
+        phasesList.forEach(ph => {
+          if (!currentConfig.phases) currentConfig.phases = {};
+          if (!currentConfig.phases[ph]) currentConfig.phases[ph] = {};
+
+          currentConfig.phases[ph].provider = data.get(`phase_${ph}_provider`)?.toString() || 'gemini';
+          currentConfig.phases[ph].model = data.get(`phase_${ph}_model`)?.toString() || 'gemini-2.5-flash';
+          currentConfig.phases[ph].temperature = parseFloat(data.get(`phase_${ph}_temp`)?.toString() || '0.2');
+          currentConfig.phases[ph].system_prompt = data.get(`phase_${ph}_prompt`)?.toString() || '';
+        });
+
+        fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2), 'utf-8');
+        message = `✓ Configuración de Agentes e IAs guardada y aplicada correctamente en caliente.`;
+        messageType = 'success';
+      } catch (err) {
+        message = `❌ Error guardando configuración: ${err.message}`;
+        messageType = 'error';
+      }
+    }
+    else if (action === 'delete_article') {
+      const articleId = data.get('article_id')?.toString() || '';
+      db.prepare("DELETE FROM articles WHERE id = ?").run(articleId);
+      message = `✓ Artículo eliminado físicamente de la base de datos.`;
+      messageType = 'success';
+    }
+    else if (action === 'create_article') {
+      const title = data.get('title')?.toString() || '';
+      const subtitle = data.get('subtitle')?.toString() || '';
+      const verdict = data.get('verdict')?.toString() || '';
+      const explanation = data.get('explanation')?.toString() || '';
+      const whatIsTrue = data.get('what_is_true')?.toString() || '';
+      const whatIsFalse = data.get('what_is_false')?.toString() || '';
+      const whatLacksContext = data.get('what_lacks_context')?.toString() || '';
+      const whatIsNotProven = data.get('what_is_not_proven')?.toString() || '';
+      const topicId = data.get('topic_id')?.toString() || '';
+      const status = data.get('status')?.toString() || 'borrador';
+      const claim = data.get('claim')?.toString() || '';
+      const originPlatform = data.get('origin_platform')?.toString() || 'Manual';
+      const originUrl = data.get('origin_url')?.toString() || '';
+      const trickUsed = data.get('trick_used')?.toString() || 'dato sin base';
+      const matizaScore = parseInt(data.get('matiza_score')?.toString() || '50', 10);
+      const emojiTag = data.get('emoji_tag')?.toString() || '🧊 Falta contexto';
+      const tagsStr = data.get('tags')?.toString() || '';
+
+      if (title.trim()) {
+        const id = `art-manual-${Date.now()}`;
+        let baseSlug = title.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-').substring(0, 60);
+        baseSlug = baseSlug.replace(/-+$/, '').replace(/^-+/, '');
+        if (!baseSlug) {
+          baseSlug = 'articulo';
+        }
+        let slug = baseSlug;
+        let counter = 1;
+        while (true) {
+          const row = db.prepare("SELECT id FROM articles WHERE slug = ?").get(slug);
+          if (!row) {
+            break;
+          }
+          counter++;
+          slug = `${baseSlug}-${counter}`;
+        }
+        const category = topicId
+          ? (db.prepare("SELECT category FROM topics WHERE id = ?").get(topicId)?.category || 'General')
+          : 'General';
+
+        const originDate = data.get('origin_date')?.toString() || new Date().toISOString();
+        db.prepare(`
+          INSERT INTO articles (id, topic_id, slug, title, subtitle, claim, origin_platform, origin_url, origin_summary, category, verdict, confidence, summary, explanation, what_is_true, what_is_false, what_lacks_context, what_is_not_proven, status, human_review_required, published_at, origin_date, trick_used, matiza_score, emoji_tag, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'Alta', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        `).run(
+          id, topicId || null, slug, title, subtitle, claim, originPlatform, originUrl,
+          category, verdict, subtitle, explanation, whatIsTrue, whatIsFalse, whatLacksContext, whatIsNotProven,
+          status, status === 'publicado' ? new Date().toISOString() : null, originDate,
+          trickUsed, matizaScore, emojiTag
+        );
+
+        // Insertar tags asociados
+        if (tagsStr.trim()) {
+          const tags = tagsStr.split(',').map(t => t.trim()).filter(Boolean);
+          const insertTag = db.prepare("INSERT OR IGNORE INTO tags (id, slug, name) VALUES (?, ?, ?)");
+          const insertArticleTag = db.prepare("INSERT OR IGNORE INTO article_tags (article_id, tag_id) VALUES (?, ?)");
+          tags.forEach(t => {
+            const slug = t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+            let existing = db.prepare("SELECT id FROM tags WHERE slug = ?").get(slug) as any;
+            let tagId;
+            if (existing) {
+              tagId = existing.id;
+            } else {
+              tagId = `tag-manual-${Date.now()}-${Math.floor(Math.random() * 100)}`;
+              insertTag.run(tagId, slug, t);
+            }
+            insertArticleTag.run(id, tagId);
+          });
+        }
+
+        message = `✓ Nuevo análisis de desmentido "${title}" guardado correctamente en la base de datos.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'create_topic') {
+      const title = data.get('title')?.toString() || '';
+      const category = data.get('category')?.toString() || '';
+      const description = data.get('description')?.toString() || '';
+      const verdictSummary = data.get('verdict_summary')?.toString() || '';
+      const confidence = data.get('confidence')?.toString() || 'Alta';
+
+      if (title.trim()) {
+        const topicId = `t-${Date.now()}`;
+        const slug = title.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-').substring(0, 60);
+
+        db.prepare(`
+          INSERT INTO topics (id, slug, title, description, category, verdict_summary, confidence, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'activo', datetime('now'), datetime('now'))
+        `).run(topicId, slug, title, description, category, verdictSummary, confidence);
+
+        message = `✓ Nuevo expediente temático "${title}" creado con éxito.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'edit_topic') {
+      const topicId = data.get('topic_id')?.toString() || '';
+      const title = data.get('title')?.toString() || '';
+      const category = data.get('category')?.toString() || '';
+      const description = data.get('description')?.toString() || '';
+      const verdictSummary = data.get('verdict_summary')?.toString() || '';
+      const status = data.get('status')?.toString() || 'activo';
+      const confidence = data.get('confidence')?.toString() || 'Alta';
+
+      if (topicId && title.trim()) {
+        db.prepare(`
+          UPDATE topics
+          SET title = ?, category = ?, description = ?, verdict_summary = ?, status = ?, confidence = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(title, category, description, verdictSummary, status, confidence, topicId);
+
+        message = `✓ Expediente temático "${title}" actualizado correctamente.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'create_claim') {
+      const claim = data.get('claim')?.toString() || '';
+      const platform = data.get('platform')?.toString() || 'Admin Manual';
+      const url = data.get('url')?.toString() || '';
+
+      if (claim.trim().length > 5) {
+        const id = `manual-scraped-${Date.now()}`;
+        db.prepare(`
+          INSERT INTO scraped_items (id, platform, url, text, author_public_name, metrics_json, detected_claim, suggested_topic, virality_score, risk_score, status, created_at)
+          VALUES (?, ?, ?, ?, 'Administrador', '{}', ?, 'General', 10.0, 8.0, 'pendiente', datetime('now'))
+        `).run(id, platform, url, claim, claim);
+
+        message = `✓ Reclamación registrada. Se procesará asíncronamente en segundo plano por el motor de Hermes.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'add_radar_source') {
+      const platform = data.get('platform')?.toString() || '';
+      const name = data.get('name')?.toString() || '';
+      const urlOrId = data.get('url_or_id')?.toString() || '';
+
+      if (platform && name && urlOrId) {
+        const id = `source-${platform.toLowerCase()}-${Date.now()}`;
+        db.prepare(`
+          INSERT INTO radar_sources (id, platform, name, url_or_id, status, created_at)
+          VALUES (?, ?, ?, ?, 'activo', datetime('now'))
+        `).run(id, platform, name, urlOrId);
+
+        message = `✓ Nueva fuente de radar "${name}" (${platform}) añadida con éxito.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'delete_radar_source') {
+      const sourceId = data.get('source_id')?.toString() || '';
+      if (sourceId) {
+        db.prepare("DELETE FROM radar_sources WHERE id = ?").run(sourceId);
+        message = `✓ Fuente de radar eliminada correctamente.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'check_url') {
+      const url = data.get('check_url')?.toString() || '';
+      if (url.trim().length > 5) {
+        try {
+          urlCheckResult = await analyzeUrl(url);
+          if (urlCheckResult.isAccessible) {
+            message = ` URL verificada: ${urlCheckResult.platform} — "${(urlCheckResult.title || '').substring(0, 80)}"...`;
+            messageType = 'success';
+          } else {
+            message = ` URL no accesible: ${urlCheckResult.error || 'Sin respuesta'}`;
+            messageType = 'error';
+          }
+        } catch (err) {
+          message = ` Error analizando URL: ${err.message}`;
+          messageType = 'error';
+        }
+      } else {
+        message = ' Introduce una URL válida para analizar.';
+        messageType = 'error';
+      }
+    }
+    else if (action === 'insert_checked_url') {
+      const url = data.get('url')?.toString() || '';
+      const platform = data.get('platform')?.toString() || 'Manual';
+      const title = data.get('title')?.toString() || '';
+      const description = data.get('description')?.toString() || '';
+      const author = data.get('author')?.toString() || 'Editor';
+      const topicId = data.get('topic_id')?.toString() || '';
+      const imageUrl = data.get('imageUrl')?.toString() || '';
+
+      if (url.trim().length > 5) {
+        const id = `manual-url-${Date.now()}`;
+        const topicTitle = topicId
+          ? (db.prepare("SELECT title FROM topics WHERE id = ?").get(topicId)?.title || 'General')
+          : 'General';
+
+        const metricsJson = JSON.stringify({ score: 100, comments: 0, imageUrl: imageUrl || null });
+
+        db.prepare(`
+          INSERT INTO scraped_items (id, platform, url, text, author_public_name, metrics_json, detected_claim, suggested_topic, virality_score, risk_score, status, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 10.0, 8.0, 'pendiente', datetime('now'))
+        `).run(id, platform, url, `${title}\n\n${description}`, author, metricsJson, title || description.substring(0, 200), topicTitle);
+
+        message = ` URL registrada con éxito. Se procesará asíncronamente en segundo plano por el motor de Hermes.`;
+        messageType = 'success';
+        urlCheckResult = null;
+      }
+    }
+    else if (action === 'trigger_sync') {
+      message = `✓ Sincronización y Reconstrucción iniciadas en segundo plano.`;
+      messageType = 'success';
+      exec('node scripts/sync.js', (err, stdout, stderr) => {
+        const output = stdout + (stderr ? '\nSTDERR:\n' + stderr : '');
+        dbPath && getDatabase().prepare("INSERT INTO verification_logs (id, status, query_text, verdict, execution_log, ip_address, created_at) VALUES (?, 'Sync', 'Sincronización Manual', 'Completado', ?, 'Servidor', datetime('now'))").run(`sync-${Date.now()}`, output);
+      });
+    }
+    else if (action === 'trigger_build') {
+      message = `✓ Compilación estática del portal iniciada en segundo plano.`;
+      messageType = 'success';
+      exec('npm run build', (err, stdout, stderr) => {
+        const output = stdout + (stderr ? '\nSTDERR:\n' + stderr : '');
+        dbPath && getDatabase().prepare("INSERT INTO verification_logs (id, status, query_text, verdict, execution_log, ip_address, created_at) VALUES (?, 'Build', 'Compilación Manual', 'Completado', ?, 'Servidor', datetime('now'))").run(`build-${Date.now()}`, output);
+      });
+    }
+    else if (action === 'trigger_radar') {
+      message = `✓ Escaneo de radar iniciado en segundo plano.`;
+      messageType = 'success';
+      exec('node scripts/radar-cron.js', (err, stdout, stderr) => {
+        const output = stdout + (stderr ? '\nSTDERR:\n' + stderr : '');
+        dbPath && getDatabase().prepare("INSERT INTO verification_logs (id, status, query_text, verdict, execution_log, ip_address, created_at) VALUES (?, 'Radar', 'Radar Manual', 'Completado', ?, 'Servidor', datetime('now'))").run(`radar-${Date.now()}`, output);
+      });
+    }
+    else if (action === 'trigger_ai') {
+      message = `✓ Pipeline de IA y redacción de borradores iniciados en segundo plano.`;
+      messageType = 'success';
+      exec('node scripts/ai-pipeline.js', (err, stdout, stderr) => {
+        const output = stdout + (stderr ? '\nSTDERR:\n' + stderr : '');
+        dbPath && getDatabase().prepare("INSERT INTO verification_logs (id, status, query_text, verdict, execution_log, ip_address, created_at) VALUES (?, 'IA', 'Pipeline IA Manual', 'Completado', ?, 'Servidor', datetime('now'))").run(`ai-${Date.now()}`, output);
+      });
+    }
+    else if (action === 'approve_submission') {
+      const submissionId = data.get('submission_id')?.toString() || '';
+      const suggestedTopicId = data.get('topic_id')?.toString() || '';
+
+      const sub = db.prepare("SELECT * FROM user_submissions WHERE id = ?").get(submissionId) as any;
+      if (sub) {
+        // Mover a scraped_items como pendiente para que el pipeline lo procese de forma completa
+        const radarId = `radar-user-${Date.now()}`;
+        const topicTitle = db.prepare("SELECT title FROM topics WHERE id = ?").get(suggestedTopicId)?.title || 'General';
+
+        db.prepare(`
+          INSERT INTO scraped_items (id, platform, url, text, author_public_name, metrics_json, detected_claim, suggested_topic, virality_score, risk_score, status, created_at)
+          VALUES (?, 'Usuario', ?, ?, 'Usuario Anónimo', '{}', ?, ?, 8.0, 7.0, 'pendiente', datetime('now'))
+        `).run(radarId, sub.submitted_url || null, sub.submitted_text || '', sub.submitted_text ? sub.submitted_text.substring(0, 100) : 'Link', topicTitle);
+
+        db.prepare("UPDATE user_submissions SET status = 'en_cola', suggested_topic_id = ?, reason = 'Aprobado para investigación' WHERE id = ?").run(suggestedTopicId, submissionId);
+
+        message = `✓ Envío de usuario aprobado e insertado en la cola del radar.`;
+        messageType = 'success';
+
+        // Lanzar pipeline de IA en segundo plano de forma asíncrona no bloqueante
+        exec('node scripts/ai-pipeline.js && node scripts/sync.js', (err) => {
+          if (err) {
+            console.error('Error ejecutando pipeline de IA asíncrono:', err.message);
+          } else {
+            console.log('Pipeline de IA y Sincronización completados con éxito.');
+          }
+        });
+      }
+    }
+    else if (action === 'discard_submission') {
+      const submissionId = data.get('submission_id')?.toString() || '';
+      const reason = data.get('reason')?.toString() || 'Baja relevancia sociopolítica.';
+
+      db.prepare("UPDATE user_submissions SET status = 'descartado_por_baja_relevancia', reason = ? WHERE id = ?").run(reason, submissionId);
+      message = `✓ Envío descartado por baja relevancia.`;
+      messageType = 'error';
+    }
+    else if (action === 'process_radar_item') {
+      const itemId = data.get('item_id')?.toString() || '';
+      if (itemId) {
+        // Cambiar el estado a 'procesando' de inmediato para retirarlo de la vista del usuario en el recargado
+        db.prepare("UPDATE scraped_items SET status = 'procesando' WHERE id = ?").run(itemId);
+        message = `✓ Procesamiento de IA iniciado para este claim. Los borradores estarán listos en unos instantes.`;
+        messageType = 'success';
+
+        exec('node scripts/ai-pipeline.js && node scripts/sync.js', (err) => {
+          if (err) {
+            console.error('Error procesando item de radar con IA:', err.message);
+          }
+        });
+      }
+    }
+    else if (action === 'discard_radar_item') {
+      const itemId = data.get('item_id')?.toString() || '';
+      if (itemId) {
+        db.prepare("UPDATE scraped_items SET status = 'ruido' WHERE id = ?").run(itemId);
+        message = `✓ Item del radar descartado correctamente.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'reprocess_phase') {
+      const articleId = data.get('article_id')?.toString() || '';
+      const phase = data.get('phase')?.toString() || '';
+
+      if (articleId && phase) {
+        // Forzar reprocesado de fase
+        try {
+          const art = db.prepare("SELECT * FROM articles WHERE id = ?").get(articleId) as any;
+          if (art) {
+            if (phase === '08-article-writer') {
+              const { writeArticle } = await import('../../scripts/matiza-engine/08-article-writer.js' as any);
+              const sources = db.prepare("SELECT * FROM sources WHERE article_id = ?").all(articleId) as any[];
+              const updated = await writeArticle(art.claim, {
+                verdict: art.verdict,
+                verdict_reasoning: art.explanation,
+                what_is_true: art.what_is_true,
+                what_is_false: art.what_is_false,
+                what_lacks_context: art.what_lacks_context,
+                what_is_not_proven: art.what_is_not_proven
+              }, sources);
+
+              db.prepare(`
+                UPDATE articles
+                SET title = ?, subtitle = ?, summary = ?, explanation = ?, updated_at = datetime('now')
+                WHERE id = ?
+              `).run(updated.title, updated.subtitle, updated.summary, updated.explanation, articleId);
+              message = `✓ Fase 08 (Redacción) reprocesada correctamente para este artículo.`;
+              messageType = 'success';
+              } else if (phase === '11-social-writer') {
+              const { writeSocialPosts } = await import('../../scripts/matiza-engine/11-social-writer.js' as any);
+              const posts = await writeSocialPosts(art.title, art.subtitle, art.verdict, art.claim);
+
+              db.prepare("DELETE FROM social_posts WHERE article_id = ?").run(articleId);
+              const insertSocialPost = db.prepare(`
+                INSERT OR REPLACE INTO social_posts (id, article_id, platform, format, content, status, scheduled_at, published_at)
+                VALUES (?, ?, ?, ?, ?, 'borrador', null, null)
+              `);
+              posts.forEach((post: any, idx: number) => {
+                insertSocialPost.run(
+                  `soc-ai-${Date.now()}-${idx}-${Math.floor(Math.random() * 100)}`,
+                  articleId,
+                  post.platform,
+                  post.format,
+                  post.content
+                );
+              });
+              message = `✓ Fase 11 (Social Writer) reprocesada correctamente. Hilos sociales actualizados.`;
+              messageType = 'success';
+            }
+          }
+        } catch (e: any) {
+          message = ` Error al reprocesar fase: ${e.message}`;
+          messageType = 'error';
+        }
+      }
+    }
+    else if (action === 'create_party') {
+      const name = data.get('name')?.toString() || '';
+      const leader = data.get('leader')?.toString() || '';
+      const website = data.get('website')?.toString() || '';
+      const ideology = data.get('ideology')?.toString() || '';
+
+      if (name.trim()) {
+        const id = `p-${Date.now()}`;
+        const slug = name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-').substring(0, 50);
+        db.prepare(`
+          INSERT INTO parties (id, slug, name, ideology_summary, official_website, logo_url, current_leader, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, '', ?, datetime('now'), datetime('now'))
+        `).run(id, slug, name, ideology, website, leader);
+        message = `✓ Partido político "${name}" creado correctamente.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'edit_party') {
+      const partyId = data.get('party_id')?.toString() || '';
+      const name = data.get('name')?.toString() || '';
+      const leader = data.get('leader')?.toString() || '';
+      const website = data.get('website')?.toString() || '';
+      const ideology = data.get('ideology')?.toString() || '';
+
+      if (partyId && name.trim()) {
+        db.prepare(`
+          UPDATE parties
+          SET name = ?, current_leader = ?, official_website = ?, ideology_summary = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(name, leader, website, ideology, partyId);
+        message = `✓ Partido político "${name}" actualizado con éxito.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'delete_party') {
+      const partyId = data.get('party_id')?.toString() || '';
+      db.prepare("DELETE FROM parties WHERE id = ?").run(partyId);
+      message = `✓ Partido político eliminado físicamente.`;
+      messageType = 'success';
+    }
+    else if (action === 'create_measure') {
+      const partyId = data.get('party_id')?.toString() || '';
+      const area = data.get('area')?.toString() || '';
+      const title = data.get('title')?.toString() || '';
+      const originalText = data.get('original_text')?.toString() || '';
+      const summary = data.get('summary')?.toString() || '';
+      const impact = data.get('impact')?.toString() || '';
+      const targets = data.get('targets')?.toString() || '';
+
+      // Obtener o crear un programa electoral para este partido
+      let programId = '';
+      const existingProg = db.prepare("SELECT id FROM electoral_programs WHERE party_id = ?").get(partyId) as any;
+      if (existingProg) {
+        programId = existingProg.id;
+      } else {
+        programId = `prog-${Date.now()}`;
+        db.prepare(`
+          INSERT INTO electoral_programs (id, party_id, election_name, election_date, program_url, source_file_path, status, created_at, updated_at)
+          VALUES (?, ?, 'Generales 2023', '2023-07-23', '', '', 'activo', datetime('now'), datetime('now'))
+        `).run(programId, partyId);
+      }
+
+      if (partyId && title.trim() && summary.trim()) {
+        const id = `meas-${Date.now()}`;
+        db.prepare(`
+          INSERT INTO policy_measures (id, program_id, party_id, area, title, original_text, plain_language_summary, possible_impact, target_groups, source_page, confidence, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'Alta', datetime('now'))
+        `).run(id, programId, partyId, area, title, originalText, summary, impact, targets);
+        message = `✓ Propuesta de programa electoral creada con éxito.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'edit_measure') {
+      const measureId = data.get('measure_id')?.toString() || '';
+      const area = data.get('area')?.toString() || '';
+      const title = data.get('title')?.toString() || '';
+      const originalText = data.get('original_text')?.toString() || '';
+      const summary = data.get('summary')?.toString() || '';
+      const impact = data.get('impact')?.toString() || '';
+      const targets = data.get('targets')?.toString() || '';
+
+      if (measureId && title.trim() && summary.trim()) {
+        db.prepare(`
+          UPDATE policy_measures
+          SET area = ?, title = ?, original_text = ?, plain_language_summary = ?, possible_impact = ?, target_groups = ?
+          WHERE id = ?
+        `).run(area, title, originalText, summary, impact, targets, measureId);
+        message = `✓ Propuesta electoral actualizada con éxito.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'delete_measure') {
+      const measureId = data.get('measure_id')?.toString() || '';
+      db.prepare("DELETE FROM policy_measures WHERE id = ?").run(measureId);
+      message = `✓ Propuesta electoral eliminada.`;
+      messageType = 'success';
+    }
+    else if (action === 'create_promise') {
+      const partyId = data.get('party_id')?.toString() || '';
+      const measureId = data.get('measure_id')?.toString() || null;
+      const text = data.get('promise_text')?.toString() || '';
+      const govLevel = data.get('government_level')?.toString() || 'Estatal';
+      const status = data.get('status')?.toString() || 'prometido';
+      const actionTaken = data.get('action_taken')?.toString() || '';
+      const evidenceUrl = data.get('evidence_url')?.toString() || '';
+      const evidenceSummary = data.get('evidence_summary')?.toString() || '';
+
+      if (partyId && text.trim()) {
+        const id = `prom-${Date.now()}`;
+        db.prepare(`
+          INSERT INTO promise_tracking (id, party_id, measure_id, promise_text, government_level, was_in_government, action_taken, evidence_url, evidence_summary, status, notes, updated_at)
+          VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, '', datetime('now'))
+        `).run(id, partyId, measureId || null, text, govLevel, actionTaken, evidenceUrl, evidenceSummary, status);
+        message = `✓ Promesa y seguimiento creados con éxito.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'edit_promise') {
+      const promiseId = data.get('promise_id')?.toString() || '';
+      const text = data.get('promise_text')?.toString() || '';
+      const govLevel = data.get('government_level')?.toString() || 'Estatal';
+      const status = data.get('status')?.toString() || 'prometido';
+      const actionTaken = data.get('action_taken')?.toString() || '';
+      const evidenceUrl = data.get('evidence_url')?.toString() || '';
+      const evidenceSummary = data.get('evidence_summary')?.toString() || '';
+
+      if (promiseId && text.trim()) {
+        db.prepare(`
+          UPDATE promise_tracking
+          SET promise_text = ?, government_level = ?, status = ?, action_taken = ?, evidence_url = ?, evidence_summary = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(text, govLevel, status, actionTaken, evidenceUrl, evidenceSummary, promiseId);
+        message = `✓ Promesa de seguimiento actualizada con éxito.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'delete_promise') {
+      const promiseId = data.get('promise_id')?.toString() || '';
+      db.prepare("DELETE FROM promise_tracking WHERE id = ?").run(promiseId);
+      message = `✓ Registro de promesa eliminado.`;
+      messageType = 'success';
+    }
+    else if (action === 'create_declaration') {
+      const partyId = data.get('party_id')?.toString() || '';
+      const personName = data.get('person_name')?.toString() || '';
+      const role = data.get('role')?.toString() || '';
+      const sourceUrl = data.get('source_url')?.toString() || '';
+      const assets = data.get('declared_assets_summary')?.toString() || '';
+      const debts = data.get('declared_debts_summary')?.toString() || '';
+
+      if (partyId && personName.trim() && role.trim()) {
+        const id = `decl-${Date.now()}`;
+        db.prepare(`
+          INSERT INTO asset_declarations (id, party_id, person_name, role, source_url, declared_assets_summary, declared_debts_summary, date_declared, notes, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, date('now'), '', datetime('now'))
+        `).run(id, partyId, personName, role, sourceUrl, assets, debts);
+        message = `✓ Declaración de bienes y patrimonio creada con éxito.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'edit_declaration') {
+      const declarationId = data.get('declaration_id')?.toString() || '';
+      const personName = data.get('person_name')?.toString() || '';
+      const role = data.get('role')?.toString() || '';
+      const sourceUrl = data.get('source_url')?.toString() || '';
+      const assets = data.get('declared_assets_summary')?.toString() || '';
+      const debts = data.get('declared_debts_summary')?.toString() || '';
+
+      if (declarationId && personName.trim() && role.trim()) {
+        db.prepare(`
+          UPDATE asset_declarations
+          SET person_name = ?, role = ?, source_url = ?, declared_assets_summary = ?, declared_debts_summary = ?
+          WHERE id = ?
+        `).run(personName, role, sourceUrl, assets, debts, declarationId);
+        message = `✓ Declaración de bienes actualizada correctamente.`;
+        messageType = 'success';
+      }
+    }
+    else if (action === 'delete_declaration') {
+      const declarationId = data.get('declaration_id')?.toString() || '';
+      db.prepare("DELETE FROM asset_declarations WHERE id = ?").run(declarationId);
+      message = `✓ Declaración de bienes eliminada de la base de datos.`;
+      messageType = 'success';
+    }
+
+    db.close();
+  } catch (err) {
+    console.error('Error procesando acción de administración:', err);
+    message = ` Error: ${err.message}`;
+    messageType = 'error';
+  }
+}
+
+// Cargar datos para la vista
+const db = getDatabase();
+
+// 1. Artículos en estado borrador (Cola de Aprobación)
+const draftArticles = db.prepare(`
+  SELECT a.*, t.title as topic_title
+  FROM articles a
+  LEFT JOIN topics t ON a.topic_id = t.id
+  WHERE a.status = 'borrador'
+  ORDER BY a.created_at DESC
+`).all() as any[];
+
+const draftsWithDetails = draftArticles.map(art => {
+  const sources = db.prepare("SELECT * FROM sources WHERE article_id = ?").all(art.id) as any[];
+  const socialPosts = db.prepare("SELECT * FROM social_posts WHERE article_id = ?").all(art.id) as any[];
+  const tags = db.prepare("SELECT t.name FROM tags t JOIN article_tags at ON t.id = at.tag_id WHERE at.article_id = ?").all(art.id).map((r: any) => r.name) as string[];
+  return { ...art, sources, socialPosts, tags };
+});
+
+// 2. Artículos en estado publicado
+const publishedArticles = db.prepare(`
+  SELECT a.*, t.title as topic_title
+  FROM articles a
+  LEFT JOIN topics t ON a.topic_id = t.id
+  WHERE a.status = 'publicado'
+  ORDER BY a.published_at DESC
+`).all() as any[];
+
+const publishedWithDetails = publishedArticles.map(art => {
+  const sources = db.prepare("SELECT * FROM sources WHERE article_id = ?").all(art.id) as any[];
+  const socialPosts = db.prepare("SELECT * FROM social_posts WHERE article_id = ?").all(art.id) as any[];
+  const tags = db.prepare("SELECT t.name FROM tags t JOIN article_tags at ON t.id = at.tag_id WHERE at.article_id = ?").all(art.id).map((r: any) => r.name) as string[];
+  return { ...art, sources, socialPosts, tags };
+});
+
+// 3. Elementos del radar pendientes
+const pendingRadarItems = db.prepare(`
+  SELECT * FROM scraped_items
+  WHERE status = 'pendiente'
+  ORDER BY created_at DESC
+`).all() as any[];
+
+// 4. Fuentes del radar
+const radarSources = db.prepare("SELECT * FROM radar_sources ORDER BY platform, name").all() as any[];
+
+// 5. Todos los temas (para administración)
+const allTopics = db.prepare("SELECT * FROM topics ORDER BY title").all() as any[];
+
+// 6. Temas activos para el selector de vinculación
+const activeTopics = allTopics.filter(t => t.status === 'activo');
+
+// 7. Cargar Partidos, Propuestas, Promesas y Declaraciones de Bienes para Auditoría Política
+const allParties = db.prepare("SELECT * FROM parties ORDER BY name").all() as any[];
+const allMeasures = db.prepare(`
+  SELECT pm.*, p.name as party_name
+  FROM policy_measures pm
+  LEFT JOIN parties p ON pm.party_id = p.id
+  ORDER BY p.name, pm.area
+`).all() as any[];
+const allPromises = db.prepare(`
+  SELECT pt.*, p.name as party_name, pm.title as measure_title
+  FROM promise_tracking pt
+  LEFT JOIN parties p ON pt.party_id = p.id
+  LEFT JOIN policy_measures pm ON pt.measure_id = pm.id
+  ORDER BY p.name, pt.promise_text
+`).all() as any[];
+const allDeclarations = db.prepare(`
+  SELECT ad.*, p.name as party_name
+  FROM asset_declarations ad
+  LEFT JOIN parties p ON ad.party_id = p.id
+  ORDER BY ad.person_name
+`).all() as any[];
+
+const verificationLogs = db.prepare("SELECT * FROM verification_logs ORDER BY created_at DESC").all() as any[];
+
+// Cargar envíos del radar ciudadano
+const userSubmissions = db.prepare("SELECT * FROM user_submissions ORDER BY created_at DESC").all() as any[];
+
+// Cargar información de caches
+const topicCaches = db.prepare("SELECT * FROM topic_cache").all() as any[];
+const claimCaches = db.prepare("SELECT * FROM claim_cache ORDER BY last_seen DESC LIMIT 50").all() as any[];
+
+let pipelineRuns = [];
+try {
+  pipelineRuns = db.prepare("SELECT * FROM pipeline_runs ORDER BY started_at DESC LIMIT 15").all() as any[];
+} catch (e: any) {
+  console.warn('[Admin] Tabla pipeline_runs no lista:', e.message);
+}
+
+db.close();
+
+// Cargar claves de FreeLLMAPI
+const freeLlmDbPath = process.platform === 'win32'
+  ? path.join(process.env.APPDATA, 'FreeLLMAPI', 'freeapi.db')
+  : '/home/ubuntu/freellmapi/server/data/freeapi.db';
+
+let freeLlmKeys = [];
+try {
+  if (fs.existsSync(freeLlmDbPath)) {
+    const freeDb = getDatabase();
+    freeLlmKeys = freeDb.prepare("SELECT platform, label, enabled, status, base_url, last_checked_at FROM api_keys ORDER BY platform, label").all() as any[];
+    freeDb.close();
+  }
+} catch (e: any) {
+  console.error('[Admin] Error leyendo DB de FreeLLMAPI:', e.message);
+}
+
+// Cargar la configuración de pipeline_config.json
+const pipelineConfigPath = path.resolve('pipeline_config.json');
+let pipelineConfigJson = '{}';
+if (fs.existsSync(pipelineConfigPath)) {
+  pipelineConfigJson = fs.readFileSync(pipelineConfigPath, 'utf-8');
+}
+
+// Mapa de veredicto a color neón
+const getVerdictClass = (verdict) => {
+  const v = (verdict || '').toLowerCase();
+  if (v.includes('verdadero')) return 'green';
+  if (v.includes('falso')) return 'rose';
+  if (v.includes('engañoso') || v.includes('contexto')) return 'amber';
+  return 'purple';
+};
+---
+
+<Layout title="Panel de Control Editorial y Radar">
+  <div class="admin-container">
+
+    <!-- CABECERA PREMIUM NEÓN -->
+    <header class="admin-header">
+      <div class="header-main">
+        <h1> Portal <span class="text-gradient-blue">Control Center</span></h1>
+        <p>Consola de verificación, editor de desmentidos y control del radar inteligente de IA.</p>
+      </div>
+
+      <!-- KPIs interactivas que actúan como pestañas de navegación principales -->
+      <div class="dashboard-kpis">
+        <div class="kpi-card gold" data-tab="pane-dashboard">
+          <span class="kpi-val">💻</span>
+          <span class="kpi-label">DASHBOARD</span>
+        </div>
+        <div class="kpi-card purple" data-tab="pane-aprobacion">
+          <span class="kpi-val">{draftsWithDetails.length}</span>
+          <span class="kpi-label">En Moderación</span>
+        </div>
+        <div class="kpi-card red" data-tab="pane-dashboard">
+          <span class="kpi-val">{pendingRadarItems.length}</span>
+          <span class="kpi-label">Cola Radar</span>
+        </div>
+        <div class="kpi-card orange" data-tab="pane-user-submissions">
+          <span class="kpi-val">{userSubmissions.filter(s => s.status === 'recibido').length}</span>
+          <span class="kpi-label">Triage Usuarios</span>
+        </div>
+        <div class="kpi-card blue" data-tab="pane-publicados">
+          <span class="kpi-val">{publishedWithDetails.length}</span>
+          <span class="kpi-label">Publicados</span>
+        </div>
+        <div class="kpi-card green" data-tab="pane-temas">
+          <span class="kpi-val">{allTopics.length}</span>
+          <span class="kpi-label">Expedientes</span>
+        </div>
+        <div class="kpi-card cyan" data-tab="pane-motor">
+          <span class="kpi-val">⚙️</span>
+          <span class="kpi-label">Motor MATIZA</span>
+        </div>
+        <div class="kpi-card yellow" data-tab="pane-politica">
+          <span class="kpi-val">🛡️</span>
+          <span class="kpi-label">Auditoría Política</span>
+        </div>
+        <div class="kpi-card grey" data-tab="pane-radar">
+          <span class="kpi-val">{radarSources.length}</span>
+          <span class="kpi-label">Fuentes Radar</span>
+        </div>
+        <div class="kpi-card dark-grey" data-tab="pane-verificaciones">
+          <span class="kpi-val">{verificationLogs.length}</span>
+          <span class="kpi-label">Logs Búsqueda</span>
+        </div>
+        <div class="kpi-card green" data-tab="pane-terminal-logs" style="border-color: #00ffc4; color: #00ffc4;">
+          <span class="kpi-val">📡</span>
+          <span class="kpi-label">Terminal Logs</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Notificaciones del Servidor -->
+    {message && (
+      <div class={`toast-notification ${messageType}`}>
+        <div class="toast-indicator"></div>
+        <p>{message}</p>
+      </div>
+    )}
+
+    <!-- CONTENEDORES DE PANELES DE PESTAÑA -->
+    <div class="admin-tab-panels">
+
+      <!-- PESTAÑA 1: DASHBOARD & CONSOLA -->
+      <div id="pane-dashboard" class="admin-tab-panel active">
+        <DashboardPanel pendingCount={pendingRadarItems.length} pendingRadarItems={pendingRadarItems} />
+      </div>
+
+      <!-- PESTAÑA 2: COLA DE MODERACIÓN (BORRADORES DE LA IA) -->
+      <div id="pane-aprobacion" class="admin-tab-panel">
+        <AprobacionPanel draftsWithDetails={draftsWithDetails} activeTopics={activeTopics} getVerdictClass={getVerdictClass} />
+      </div>
+
+      <!-- PESTAÑA: TRIAGE DE USUARIOS (RADAR CIUDADANO) -->
+      <div id="pane-user-submissions" class="admin-tab-panel">
+        <TriagePanel userSubmissions={userSubmissions} activeTopics={activeTopics} />
+      </div>
+
+      <!-- PESTAÑA: MOTOR MATIZA (MONITOREO DE FASES Y CACHÉ) -->
+      <div id="pane-motor" class="admin-tab-panel">
+        <MotorPanel draftsWithDetails={draftsWithDetails} topicCaches={topicCaches} claimCaches={claimCaches} pipelineConfigJson={pipelineConfigJson} freeLlmKeys={freeLlmKeys} pipelineRuns={pipelineRuns} />
+      </div>
+
+      <!-- PESTAÑA: LOGS EN VIVO (MONITOREO DE HERMES Y CRONS EN TIEMPO REAL) -->
+      <div id="pane-terminal-logs" class="admin-tab-panel">
+        <h2 class="section-title" style="margin-top: 0; margin-bottom: 0.5rem; font-size: 1.35rem; color: #fff;">📡 Consola de Monitorización del Servidor en Vivo</h2>
+        <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1.5rem; margin-top: 0;">
+          Seguimiento en tiempo real de las ejecuciones del cron, del radar de scrapers y del pipeline de inteligencia artificial.
+        </p>
+
+        <div class="terminal-cyberpunk" style="border: 1px solid rgba(0, 255, 196, 0.3); border-radius: 12px; overflow: hidden; background: #070913; box-shadow: 0 0 15px rgba(0, 255, 196, 0.1);">
+          <div class="terminal-header" style="display: flex; align-items: center; justify-content: space-between; padding: 0.6rem 1.25rem; background: rgba(0, 255, 196, 0.03); border-bottom: 1px solid rgba(0, 255, 196, 0.2);">
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <span class="terminal-dot red" style="width: 8px; height: 8px; border-radius: 50%; background: #ff5f56; display: inline-block;"></span>
+              <span class="terminal-dot yellow" style="width: 8px; height: 8px; border-radius: 50%; background: #ffbd2e; display: inline-block;"></span>
+              <span class="terminal-dot green" style="width: 8px; height: 8px; border-radius: 50%; background: #27c93f; display: inline-block;"></span>
+              <span style="font-family: monospace; font-size: 0.75rem; color: #00ffc4; margin-left: 0.5rem; font-weight: bold;">hermes@vps:~/logs$ tail -f pipeline.log</span>
+            </div>
+            <span id="live-logs-status" style="color: #00ffc4; font-family: monospace; font-size: 0.7rem; font-weight: bold; animation: pulse 1.5s infinite;">CONECTADO (POLLING)</span>
+          </div>
+          <div class="terminal-body" id="live-terminal-body" style="background: #05070e; height: 500px; overflow-y: auto; padding: 1.5rem; font-family: monospace; font-size: 0.75rem; color: #a9b2c3; line-height: 1.6; border-radius: 0 0 12px 12px; scroll-behavior: smooth; text-align: left;">
+            <div style="color: var(--text-muted);">> Cargando logs del motor Hermes...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PESTAÑA 4: NOTICIAS PUBLICADAS (HISTÓRICO) -->
+      <div id="pane-publicados" class="admin-tab-panel">
+        <h2 class="section-title">📰 Histórico de Noticias Publicadas en Vivo</h2>
+        <div class="cards-list">
+          {publishedWithDetails.map(art => (
+            <div class={`cyber-card ${getVerdictClass(art.verdict)}`} style="padding: 1.5rem;">
+              <div class="card-meta">
+                <span class={`verdict-badge ${art.verdict.toLowerCase().replace(' ', '-')}`}>{art.verdict}</span>
+                <span style="font-size: 0.8rem;">Dossier: <strong>{art.topic_title || 'General'}</strong></span>
+                <span style="font-size: 0.8rem; color: var(--text-muted);">Publicado: {new Date(art.published_at || art.created_at).toLocaleDateString('es-ES')}</span>
+              </div>
+
+              <div class="card-content">
+                <h3 class="article-title">{art.title}</h3>
+                <p class="article-subtitle">{art.subtitle}</p>
+              </div>
+
+              <div class="row-actions">
+                <details class="accordion-edit">
+                  <summary>✏️ Editar Contenido</summary>
+                  <form method="POST" class="edit-form" style="margin-top: 1rem;">
+                    <input type="hidden" name="action" value="edit_article" />
+                    <input type="hidden" name="article_id" value={art.id} />
+
+                    <div class="form-grid">
+                      <div class="form-group">
+                        <label>Título:</label>
+                        <input type="text" name="title" value={art.title} required class="edit-input" />
+                      </div>
+                      <div class="form-group">
+                        <label>Veredicto:</label>
+                        <select name="verdict" class="edit-input">
+                          <option value="Falso" selected={art.verdict === 'Falso'}>Falso</option>
+                          <option value="Verdadero" selected={art.verdict === 'Verdadero'}>Verdadero</option>
+                          <option value="Engañoso" selected={art.verdict === 'Engañoso'}>Engañoso</option>
+                          <option value="Falta contexto" selected={art.verdict === 'Falta contexto'}>Falta contexto</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div class="form-group">
+                      <label>Subtítulo:</label>
+                      <input type="text" name="subtitle" value={art.subtitle} required class="edit-input" />
+                    </div>
+
+                    <div class="form-group">
+                      <label>Explicación:</label>
+                      <textarea name="explanation" rows="6" required class="edit-input">{art.explanation}</textarea>
+                    </div>
+
+                    <div class="form-grid-4">
+                      <div class="form-group">
+                        <label>¿Qué es Verdad?:</label>
+                        <textarea name="what_is_true" rows="2" class="edit-input">{art.what_is_true}</textarea>
+                      </div>
+                      <div class="form-group">
+                        <label>¿Qué es Mentira?:</label>
+                        <textarea name="what_is_false" rows="2" class="edit-input">{art.what_is_false}</textarea>
+                      </div>
+                      <div class="form-group">
+                        <label>¿Qué falta de contexto?:</label>
+                        <textarea name="what_lacks_context" rows="2" class="edit-input">{art.what_lacks_context}</textarea>
+                      </div>
+                      <div class="form-group">
+                        <label>¿Qué no está probado?:</label>
+                        <textarea name="what_is_not_proven" rows="2" class="edit-input">{art.what_is_not_proven}</textarea>
+                      </div>
+                    </div>
+
+                    <div class="form-grid-3" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+                      <div class="form-group">
+                        <label>Expediente:</label>
+                        <select name="topic_id" class="edit-input">
+                          <option value="">— Ninguno —</option>
+                          {activeTopics.map(t => (
+                            <option value={t.id} selected={art.topic_id === t.id}>[{t.category}] {t.title}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div class="form-group">
+                        <label>Estado:</label>
+                        <select name="status" class="edit-input">
+                          <option value="publicado" selected={art.status === 'publicado'}>Publicado (Visible)</option>
+                          <option value="borrador" selected={art.status === 'borrador'}>Despublicar (Ocultar)</option>
+                        </select>
+                      </div>
+                      <div class="form-group">
+                        <label>Fecha de Publicación Original:</label>
+                        <input type="datetime-local" name="origin_date" value={art.origin_date ? art.origin_date.replace(' ', 'T').substring(0, 16) : ''} class="edit-input" />
+                      </div>
+                    </div>
+
+                    <button type="submit" class="cyber-btn accent" style="width: 100%;"> Guardar Cambios</button>
+                  </form>
+                </details>
+
+                <form method="POST" style="margin: 0;" onsubmit="return confirm('¿Seguro que deseas eliminar definitivamente este desmentido?')">
+                  <input type="hidden" name="action" value="delete_article" />
+                  <input type="hidden" name="article_id" value={art.id} />
+                  <button type="submit" class="cyber-btn" style="border-color: var(--neon-rose); color: var(--neon-rose); padding: 0.35rem 0.75rem;">🗑️ Eliminar</button>
+                </form>
+              </div>
+            </div>
+          ))}
+          {publishedWithDetails.length === 0 && (
+            <p class="empty-state">No hay noticias publicadas todavía.</p>
+          )}
+        </div>
+      </div>
+
+      <!-- PESTAÑA 5: EXPEDIENTES TEMÁTICOS (DOSSIERS) -->
+      <div id="pane-temas" class="admin-tab-panel">
+        <h2 class="section-title">📁 Gestión de Expedientes Temáticos (Dossiers)</h2>
+
+
+
+        <!-- Listado de temas -->
+        <div class="cards-list">
+          {allTopics.map(topic => (
+            <div class="cyber-card" style="padding: 1.5rem;">
+              <div class="card-meta">
+                <span style="font-size: 0.7rem; font-weight: bold; background: rgba(255,255,255,0.05); padding: 0.15rem 0.4rem; color: var(--neon-blue); border-radius: 3px;">{topic.category}</span>
+                <strong style="font-size: 1.1rem; color: var(--text-main);">{topic.title}</strong>
+                <span style="font-size: 0.75rem; color: var(--text-muted);">Estado: {topic.status}</span>
+              </div>
+              <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.4; margin: 0.5rem 0;">{topic.description}</p>
+
+              <details class="accordion-edit">
+                <summary>✏️ Editar Expediente</summary>
+                <form method="POST" class="edit-form" style="margin-top: 1rem;">
+                  <input type="hidden" name="action" value="edit_topic" />
+                  <input type="hidden" name="topic_id" value={topic.id} />
+
+                  <div class="form-grid">
+                    <div class="form-group">
+                      <label>Título:</label>
+                      <input type="text" name="title" value={topic.title} required class="edit-input" />
+                    </div>
+                    <div class="form-group">
+                      <label>Categoría:</label>
+                      <input type="text" name="category" value={topic.category} required class="edit-input" />
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label>Descripción:</label>
+                    <textarea name="description" rows="3" required class="edit-input">{topic.description}</textarea>
+                  </div>
+
+                  <div class="form-group">
+                    <label>Resumen de Veredictos:</label>
+                    <input type="text" name="verdict_summary" value={topic.verdict_summary || ''} required class="edit-input" />
+                  </div>
+
+                  <div class="form-grid">
+                    <div class="form-group">
+                      <label>Estado:</label>
+                      <select name="status" class="edit-input">
+                        <option value="activo" selected={topic.status === 'activo'}>Activo</option>
+                        <option value="pausado" selected={topic.status === 'pausado'}>Pausado</option>
+                      </select>
+                    </div>
+                    <div class="form-group">
+                      <label>Confianza:</label>
+                      <select name="confidence" class="edit-input">
+                        <option value="Alta" selected={topic.confidence === 'Alta'}>Alta</option>
+                        <option value="Media" selected={topic.confidence === 'Media'}>Media</option>
+                        <option value="Baja" selected={topic.confidence === 'Baja'}>Baja</option>
+                        <option value="Oficial" selected={topic.confidence === 'Oficial'}>Oficial</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <button type="submit" class="cyber-btn" style="border-color: var(--neon-purple); color: var(--neon-purple); width: 100%;"> Guardar Cambios</button>
+                </form>
+              </details>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <!-- PESTAÑA 6: AUDITORÍA POLÍTICA -->
+      <div id="pane-politica" class="admin-tab-panel">
+        <h2 class="section-title"> Auditoría Política: Partidos, Propuestas y Bienes</h2>
+
+        <!-- Partidos -->
+        <div class="cyber-card" style="padding: 1.5rem; margin-bottom: 2rem;">
+          <h3 class="card-title"> Partidos Registrados ({allParties.length})</h3>
+
+
+
+          <div class="table-container">
+            {allParties.map(p => (
+              <div class="table-row">
+                <div>
+                  <strong>{p.name}</strong> - <span style="font-size: 0.8rem; color: var(--text-muted);">Líder: {p.current_leader}</span>
+                </div>
+                <form method="POST" style="margin: 0;" onsubmit="return confirm('¿Eliminar partido?')">
+                  <input type="hidden" name="action" value="delete_party" />
+                  <input type="hidden" name="party_id" value={p.id} />
+                  <button type="submit" style="background: none; border: none; color: var(--neon-rose); cursor: pointer;">🗑️</button>
+                </form>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <!-- Propuestas y Medidas -->
+        <div class="cyber-card" style="padding: 1.5rem; margin-bottom: 2rem;">
+          <h3 class="card-title"> Medidas de Programas Electorales ({allMeasures.length})</h3>
+
+
+
+          <div class="scroller-list" style="max-height: 250px; overflow-y: auto;">
+            {allMeasures.map(m => (
+              <div class="scroller-item">
+                <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.25rem;">
+                  <span style="color: var(--neon-purple); font-weight: bold;">{m.party_name} ({m.area})</span>
+                  <form method="POST" style="margin:0;">
+                    <input type="hidden" name="action" value="delete_measure" />
+                    <input type="hidden" name="measure_id" value={m.id} />
+                    <button type="submit" style="background: none; border: none; color: var(--neon-rose); cursor: pointer; font-size: 0.8rem;">🗑️</button>
+                  </form>
+                </div>
+                <strong>{m.title}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <!-- Promesas -->
+        <div class="cyber-card" style="padding: 1.5rem; margin-bottom: 2rem;">
+          <h3 class="card-title"> Seguimiento de Promesas Electorales ({allPromises.length})</h3>
+
+        </div>
+      </div>
+
+      <!-- PESTAÑA 7: RADAR & SCRAPERS -->
+      <div id="pane-radar" class="admin-tab-panel">
+        <h2 class="section-title"> Radar & Scrapers de Monitoreo</h2>
+
+        <div class="radar-split">
+
+          <!-- Columna Izquierda: Comprobador de URL y Cola del Radar -->
+          <div class="radar-col">
+
+
+
+            <!-- Cola de radar items -->
+            <div class="cyber-card" style="padding: 1.5rem;">
+              <h3 class="card-title"> Cola de Intercepción ({pendingRadarItems.length})</h3>
+              <div class="scroller-list" style="max-height: 450px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.85rem;">
+                {pendingRadarItems.map(item => (
+                  <div class="scroller-item" style="background: rgba(255, 255, 255, 0.015); padding: 0.75rem; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.04); display: flex; flex-direction: column; gap: 0.5rem; text-align: left;">
+                    <div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--text-muted);">
+                      <span>{item.platform} ({item.author_public_name})</span>
+                      <span style="color: var(--neon-rose); font-weight: bold;">Viralidad: {item.virality_score}/10</span>
+                    </div>
+                    <p style="font-size: 0.8rem; line-height: 1.35; color: #fff; margin: 0;">"{item.detected_claim || item.text.substring(0, 90)}..."</p>
+
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; border-top: 1px solid rgba(255,255,255,0.03); padding-top: 0.5rem; margin-top: 0.2rem;">
+                      <a href={item.url} target="_blank" style="font-size: 0.7rem; color: var(--neon-blue); text-decoration: none;">Ver origen 🔗</a>
+
+                      <div style="display: flex; gap: 0.35rem;">
+                        <form method="POST" style="margin: 0;">
+                          <input type="hidden" name="action" value="process_radar_item" />
+                          <input type="hidden" name="item_id" value={item.id} />
+                          <button type="submit" class="cyber-btn accent" style="padding: 0.2rem 0.5rem; font-size: 0.65rem; border-radius: 4px; cursor: pointer;">🤖 IA</button>
+                        </form>
+
+                        <form method="POST" style="margin: 0;">
+                          <input type="hidden" name="action" value="discard_radar_item" />
+                          <input type="hidden" name="item_id" value={item.id} />
+                          <button type="submit" class="cyber-btn" style="padding: 0.2rem 0.5rem; font-size: 0.65rem; border-radius: 4px; border-color: var(--neon-rose); color: var(--neon-rose); cursor: pointer;">🗑️</button>
+                        </form>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {pendingRadarItems.length === 0 && (
+                  <p class="empty-state" style="font-size: 0.8rem; color: var(--text-muted); font-style: italic; text-align: center;">No hay items en la cola esperando revisión.</p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <!-- Columna Derecha: Fuentes Registradas y Glosario del Radar -->
+          <div class="radar-col">
+
+            <!-- Fuentes Registradas -->
+            <div class="cyber-card" style="padding: 1.5rem;">
+              <h3 class="card-title"> Fuentes de Monitorización</h3>
+
+
+
+              <div class="scroller-list" style="max-height: 200px;">
+                {radarSources.map(src => (
+                  <div class="scroller-item" style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                      <span style="font-size: 0.65rem; font-weight: bold; background: rgba(255,255,255,0.05); padding: 0.1rem 0.25rem; color: var(--neon-purple); border-radius: 2px; margin-right: 0.25rem;">{src.platform}</span>
+                      <strong>{src.name}</strong>
+                      <span style="display: block; font-size: 0.7rem; color: var(--text-muted);">{src.url_or_id}</span>
+                    </div>
+                    <form method="POST" style="margin: 0;">
+                      <input type="hidden" name="action" value="delete_radar_source" />
+                      <input type="hidden" name="source_id" value={src.id} />
+                      <button type="submit" style="background: none; border: none; color: var(--neon-rose); cursor: pointer; font-size: 0.85rem;">🗑️</button>
+                    </form>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <!-- Glosario de Palabras Clave y Reglas de Negocio -->
+            <div class="cyber-card" style="padding: 1.5rem; background: rgba(0, 240, 255, 0.01); border-color: rgba(0, 240, 255, 0.15);">
+              <h3 class="card-title"> Reglas de Negocio y Clasificación</h3>
+
+              <div class="rule-block">
+                <strong>🕒 Temporalidad Estricta:</strong>
+                <ul>
+                  <li><strong>Actualidad Rápida:</strong> El radar descarta de forma automática cualquier post o noticia con antigüedad superior a <strong>24 horas</strong>.</li>
+                  <li><strong>Dossiers temáticos:</strong> Al llenar los expedientes de temas, la IA y los editores tienen un margen de búsqueda histórico de hasta <strong>1 año</strong> de antigüedad para dar contexto.</li>
+                </ul>
+              </div>
+
+              <div class="rule-block" style="margin-top: 1rem;">
+                <strong> Keywords del Scraper (España):</strong>
+                <div class="keywords-bag">
+                  <span>ley</span><span>impuesto</span><span>gobierno</span><span>bulo</span><span>okupa</span>
+                  <span>migrante</span><span>ayuda</span><span>pensión</span><span>boe</span><span>hacienda</span>
+                  <span>reforma</span><span>sánchez</span><span>feijóo</span><span>corrupción</span><span>fraude</span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- PESTAÑA 8: LOGS DE BÚSQUEDA DE USUARIOS -->
+      <div id="pane-verificaciones" class="admin-tab-panel">
+        <h2 class="section-title"> Registro de Verificaciones del Buscador Manual</h2>
+        <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 2rem;">
+          Historial completo de auditorías y búsquedas en caliente iniciadas por los usuarios desde la portada. Muestra exactamente el flujo de ejecución de la IA y el Scraper.
+        </p>
+
+        <div class="cards-list">
+          {verificationLogs.map(log => (
+            <div class="cyber-card" style="padding: 1.5rem; margin-bottom: 1.5rem; border-color: var(--neon-purple);">
+              <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+                <div>
+                  <span style="font-size: 0.8rem; font-weight: bold; background: rgba(157, 78, 221, 0.1); color: var(--neon-purple); padding: 0.2rem 0.5rem; border-radius: 4px; margin-right: 0.5rem;">
+                    {log.status}
+                  </span>
+                  <span style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">
+                    IP/Origen: {log.ip_address}
+                  </span>
+                </div>
+                <span style="font-size: 0.8rem; color: var(--text-muted);">
+                  {new Date(log.created_at).toLocaleString('es-ES')}
+                </span>
+              </div>
+
+              <div style="margin-bottom: 1rem;">
+                <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); display: block; font-weight: bold; margin-bottom: 0.25rem;">Consulta del usuario:</span>
+                <strong style="font-size: 1.15rem; color: var(--text-main); font-family: var(--font-title);">{log.query_text}</strong>
+              </div>
+
+              {log.verdict && (
+                <div style="margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
+                  <span style="font-size: 0.85rem; color: var(--text-muted);">Veredicto IA:</span>
+                  <span class={`verdict-badge ${log.verdict.toLowerCase().replace(' ', '-')}`}>
+                    {log.verdict}
+                  </span>
+                </div>
+              )}
+
+              <details class="accordion-edit" style="background: rgba(0,0,0,0.15); border-radius: 6px; border: 1px solid rgba(255,255,255,0.03);">
+                <summary style="font-family: monospace; font-size: 0.85rem; color: var(--neon-blue); padding: 0.5rem 1rem; cursor: pointer;">
+                  📟 Ver Log de Ejecución del Servidor ({log.execution_log ? log.execution_log.split('\n').length : 0} líneas)
+                </summary>
+                <div style="background: #020308; padding: 1rem; border-radius: 0 0 6px 6px; font-family: monospace; font-size: 0.8rem; color: #a5b4fc; line-height: 1.5; max-height: 300px; overflow-y: auto; white-space: pre-wrap; border-top: 1px solid rgba(255,255,255,0.05);">
+                  {log.execution_log}
+                </div>
+              </details>
+            </div>
+          ))}
+
+          {verificationLogs.length === 0 && (
+            <p class="empty-state">No hay registros de verificación manual todavía.</p>
+          )}
+        </div>
+      </div>
+
+    </div>
+  </div>
+</Layout>
+
+<!-- ESTILOS LOCALES PREMIUM PARA EL ADMIN -->
+<style>
+  .admin-container {
+    width: 100%;
+    max-width: 1050px;
+    margin: 0 auto;
+    padding: 1rem 0.5rem 5rem 0.5rem;
+  }
+  @media (min-width: 600px) {
+    .admin-container {
+      padding: 2rem 1.5rem 5rem 1.5rem;
+    }
+  }
+
+  .admin-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 2rem;
+    margin-bottom: 2rem;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 1.5rem;
+  }
+
+  .header-main h1 {
+    font-size: 2.2rem;
+    margin: 0 0 0.35rem 0;
+    font-weight: 850;
+    letter-spacing: -0.02em;
+  }
+  .header-main p {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin: 0;
+  }
+
+  .dashboard-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 0.85rem;
+    width: 100%;
+    margin-top: 1.5rem;
+  }
+  .kpi-card {
+    background: rgba(18, 22, 41, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 0.85rem 1rem;
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    min-width: 110px;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    user-select: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  }
+  .kpi-card:hover {
+    transform: translateY(-2px);
+    background: rgba(18, 22, 41, 0.75);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+  .kpi-card.purple { border-color: rgba(157, 78, 221, 0.35); color: #c77dff; }
+  .kpi-card.blue { border-color: rgba(0, 240, 255, 0.35); color: #00f0ff; }
+  .kpi-card.green { border-color: rgba(57, 255, 20, 0.35); color: #39ff14; }
+  .kpi-card.orange { border-color: rgba(255, 159, 67, 0.35); color: #ff9f43; }
+  .kpi-card.red { border-color: rgba(255, 51, 102, 0.35); color: #ff3366; }
+  .kpi-card.cyan { border-color: rgba(0, 255, 242, 0.35); color: #00fff2; }
+  .kpi-card.pink { border-color: rgba(255, 0, 128, 0.35); color: #ff0080; }
+  .kpi-card.yellow { border-color: rgba(255, 215, 0, 0.35); color: #ffd700; }
+  .kpi-card.grey { border-color: rgba(169, 178, 195, 0.35); color: #a9b2c3; }
+  .kpi-card.dark-grey { border-color: rgba(80, 90, 110, 0.35); color: #707e94; }
+
+  /* Estado activo con resplandor neón */
+  .kpi-card.active {
+    background: rgba(18, 22, 41, 0.9);
+    border-color: currentColor;
+    box-shadow: 0 0 16px currentColor;
+    transform: translateY(-1px);
+  }
+  .kpi-card.active .kpi-val {
+    text-shadow: 0 0 8px currentColor;
+  }
+
+  .kpi-val {
+    font-size: 1.3rem;
+    font-weight: 800;
+    line-height: 1.2;
+    color: var(--text-main);
+  }
+  .kpi-label {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    font-weight: bold;
+    text-transform: uppercase;
+    margin-top: 0.15rem;
+  }
+
+  /* Tabs Navigation */
+  .admin-tabs-nav {
+    display: flex;
+    gap: 0.5rem;
+    border-bottom: 2px solid var(--border-color);
+    padding: 0.75rem 0.5rem;
+    margin-bottom: 2rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+    position: sticky;
+    top: 64px; /* Justo debajo del header */
+    z-index: 990;
+    background: rgba(7, 9, 19, 0.95);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    margin-left: -0.75rem;
+    margin-right: -0.75rem;
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+  .admin-tabs-nav::-webkit-scrollbar {
+    display: none;
+  }
+  .admin-tab-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-weight: bold;
+    font-size: 0.85rem;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+    border-radius: 4px 4px 0 0;
+  }
+  .admin-tab-btn:hover {
+    color: var(--text-main);
+    background: rgba(255,255,255,0.02);
+  }
+  .admin-tab-btn.active {
+    color: var(--neon-blue);
+    border-color: var(--neon-blue);
+    background: rgba(0, 240, 255, 0.03);
+  }
+
+  /* Panels Layout */
+  .admin-tab-panel {
+    display: none;
+  }
+  .admin-tab-panel.active {
+    display: block;
+    animation: fadeIn 0.2s ease-out;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Dashboard specific styles */
+  .dashboard-grid {
+    display: grid;
+    grid-template-columns: 1.5fr 1fr;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+  }
+  @media(max-width: 768px) {
+    .dashboard-grid { grid-template-columns: 1fr; }
+  }
+
+  .console-actions {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  .console-actions form { margin: 0; }
+
+  .info-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+  }
+  .info-item {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.85rem;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    padding-bottom: 0.5rem;
+  }
+
+  /* Terminal Styles */
+  .terminal-cyberpunk {
+    background: rgba(7, 9, 19, 0.98);
+    border: 2px solid var(--neon-blue);
+    border-radius: 6px;
+    font-family: 'Courier New', Courier, monospace;
+    box-shadow: 0 0 20px rgba(0, 240, 255, 0.15);
+    margin-top: 1.5rem;
+    overflow: hidden;
+  }
+  .terminal-header {
+    background: rgba(18, 22, 41, 0.95);
+    border-bottom: 1px solid rgba(0, 240, 255, 0.2);
+    padding: 0.5rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .terminal-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+  .terminal-dot.red { background: #ff5f56; }
+  .terminal-dot.yellow { background: #ffbd2e; }
+  .terminal-dot.green { background: #27c93f; }
+  .terminal-title {
+    font-size: 0.7rem;
+    color: var(--neon-blue);
+    font-weight: bold;
+    margin-left: 0.5rem;
+  }
+  .terminal-body {
+    padding: 1.25rem;
+    max-height: 250px;
+    overflow-y: auto;
+  }
+  .terminal-body pre {
+    margin: 0;
+    color: var(--neon-green);
+    font-size: 0.82rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.45;
+  }
+
+  /* Form & Inputs */
+  .edit-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  .form-grid-4 {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.75rem;
+  }
+  @media(max-width: 768px) {
+    .form-grid, .form-grid-4 { grid-template-columns: 1fr; }
+  }
+
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .form-group label {
+    font-size: 0.75rem;
+    font-weight: bold;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+
+  .edit-input {
+    background: var(--bg-dark);
+    border: 1px solid var(--border-color);
+    padding: 0.6rem;
+    color: var(--text-main);
+    font-size: 0.85rem;
+    border-radius: 4px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .edit-input:focus {
+    border-color: var(--neon-blue);
+  }
+
+  /* Accordion styles */
+  .accordion-edit {
+    border-top: 1px dashed var(--border-color);
+    padding-top: 1rem;
+    margin-top: 0.75rem;
+  }
+  .accordion-edit summary {
+    font-weight: bold;
+    color: var(--neon-blue);
+    cursor: pointer;
+    font-size: 0.82rem;
+    outline: none;
+  }
+
+  /* Scroller Lists */
+  .scroller-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    overflow-y: auto;
+    padding-right: 0.25rem;
+  }
+  .scroller-item {
+    background: var(--bg-dark);
+    border: 1px solid var(--border-color);
+    padding: 0.75rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+  }
+
+  /* Radar specific split layout */
+  .radar-split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+  }
+  @media(max-width: 768px) {
+    .radar-split { grid-template-columns: 1fr; }
+  }
+  .radar-col {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  /* Toast Notification */
+  .toast-notification {
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: rgba(18, 22, 41, 0.85);
+  }
+  .toast-notification.success {
+    border-color: var(--neon-green);
+    color: var(--neon-green);
+  }
+  .toast-notification.error {
+    border-color: var(--neon-rose);
+    color: var(--neon-rose);
+  }
+  .toast-notification p { margin: 0; font-size: 0.85rem; font-weight: bold; }
+  .toast-indicator {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  /* Rules and Info */
+  .rule-block {
+    background: rgba(0,0,0,0.15);
+    padding: 1rem;
+    border-left: 2px solid var(--neon-blue);
+    font-size: 0.8rem;
+    border-radius: 0 4px 4px 0;
+  }
+  .rule-block strong { display: block; margin-bottom: 0.35rem; color: var(--text-main); }
+  .rule-block ul { margin: 0; padding-left: 1.25rem; line-height: 1.4; color: var(--text-muted); }
+
+  .keywords-bag {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+  .keywords-bag span {
+    font-size: 0.65rem;
+    background: rgba(255,255,255,0.03);
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    color: var(--text-muted);
+    border: 1px solid rgba(255,255,255,0.05);
+  }
+
+  .template-instructions {
+    background: rgba(0, 240, 255, 0.02);
+    border: 1px dashed rgba(0, 240, 255, 0.2);
+    padding: 0.85rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    margin-bottom: 1rem;
+  }
+  .template-instructions p { margin: 0.25rem 0 0 0; color: var(--text-muted); }
+
+  .section-title {
+    font-size: 1.4rem;
+    font-family: var(--font-title);
+    font-weight: 800;
+    margin-bottom: 1.25rem;
+    border-left: 3px solid var(--neon-blue);
+    padding-left: 0.65rem;
+  }
+  .card-title {
+    font-size: 1.1rem;
+    font-family: var(--font-title);
+    font-weight: 800;
+    margin: 0 0 0.5rem 0;
+  }
+  .sub-form-title {
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    font-weight: 800;
+    color: var(--text-muted);
+    margin: 1.5rem 0 0.75rem 0;
+    letter-spacing: 0.05em;
+  }
+
+  .empty-state {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-align: center;
+    padding: 2rem;
+    border: 1px dashed var(--border-color);
+    border-radius: 6px;
+  }
+</style>
+
+<!-- SCRIPT SPA INTERACTIVO EN EL CLIENTE -->
+<script is:inline>
+  // Gestión de pestañas instantánea mediante tarjetas KPI superiores
+  document.addEventListener('DOMContentLoaded', () => {
+    const panels = document.querySelectorAll('.admin-tab-panel');
+    const kpiCards = document.querySelectorAll('.kpi-card');
+
+    let logInterval = null;
+
+    function startLiveLogPolling() {
+      const cleanBase = window.location.pathname.includes('/pro/matiza') ? '/pro/matiza' : '';
+      const termBody = document.getElementById('live-terminal-body');
+      if (!termBody) return;
+
+      function renderLogs(logs) {
+        const isAtBottom = termBody.scrollHeight - termBody.clientHeight <= termBody.scrollTop + 50;
+        termBody.innerHTML = '';
+        logs.forEach(line => {
+          const row = document.createElement('div');
+          row.style.wordBreak = 'break-all';
+          row.style.marginBottom = '0.2rem';
+
+          if (line.includes('[ERROR]')) {
+            row.style.color = '#ff3366';
+          } else if (line.includes('[WARN]')) {
+            row.style.color = '#ffb020';
+          } else if (line.includes('[PASO]') || line.includes('Completado:')) {
+            row.style.color = '#00ffc4';
+          } else if (line.includes('Inferencia') || line.includes('callGemini')) {
+            row.style.color = '#00f0ff';
+          } else {
+            row.style.color = '#a9b2c3';
+          }
+
+          row.innerText = line;
+          termBody.appendChild(row);
+        });
+
+        if (isAtBottom) {
+          termBody.scrollTop = termBody.scrollHeight;
+        }
+      }
+
+      async function fetchLogs() {
+        try {
+          let response = await fetch(`${cleanBase}/api/admin/pipeline-logs/`);
+          if (!response.ok && !cleanBase) {
+            const alternativeResponse = await fetch(`/pro/matiza/api/admin/pipeline-logs/`);
+            if (alternativeResponse.ok) {
+              response = alternativeResponse;
+            }
+          }
+          if (!response.ok) return;
+          const data = await response.json();
+          if (data.logs && Array.isArray(data.logs)) {
+            renderLogs(data.logs);
+          }
+        } catch (err) {
+          console.error('Error fetching pipeline logs:', err);
+        }
+      }
+
+      fetchLogs();
+      if (logInterval) clearInterval(logInterval);
+      logInterval = setInterval(fetchLogs, 2500);
+    }
+
+    function stopLiveLogPolling() {
+      if (logInterval) {
+        clearInterval(logInterval);
+        logInterval = null;
+      }
+    }
+
+    function switchTab(targetId) {
+      // Alternar clase active en las tarjetas KPI superiores
+      kpiCards.forEach(card => {
+        if (card.getAttribute('data-tab') === targetId) {
+          card.classList.add('active');
+        } else {
+          card.classList.remove('active');
+        }
+      });
+
+      // Alternar visibilidad de los paneles correspondientes
+      panels.forEach(panel => {
+        if (panel.id === targetId) {
+          panel.classList.add('active');
+        } else {
+          panel.classList.remove('active');
+        }
+      });
+
+      // Iniciar o detener polling de logs continuos
+      if (targetId === 'pane-terminal-logs') {
+        startLiveLogPolling();
+      } else {
+        stopLiveLogPolling();
+      }
+
+      // Actualizar parámetro en la URL sin recargar para persistencia
+      const newUrl = new URL(window.location.href);
+      newUrl.searchParams.set('tab', targetId.replace('pane-', ''));
+      window.history.pushState({}, '', newUrl);
+    }
+
+    // Enlazar clics en las tarjetas KPI para navegación
+    kpiCards.forEach(card => {
+      card.addEventListener('click', () => {
+        const target = card.getAttribute('data-tab');
+        if (target) {
+          switchTab(target);
+        }
+      });
+    });
+
+    // Cargar pestaña inicial basada en la URL o abrir por defecto "Dashboard" (pane-dashboard)
+    const urlParams = new URLSearchParams(window.location.search);
+    const tabParam = urlParams.get('tab');
+    if (tabParam) {
+      const panelId = 'pane-' + tabParam;
+      if (document.getElementById(panelId)) {
+        switchTab(panelId);
+      } else {
+        switchTab('pane-dashboard');
+      }
+    } else {
+      switchTab('pane-dashboard');
+    }
+
+    // Lógica de previsualización en vivo para el redactor
+    const inpTitle = document.getElementById('inp-title');
+    const inpSubtitle = document.getElementById('inp-subtitle');
+    const inpVerdict = document.getElementById('inp-verdict');
+    const inpClaim = document.getElementById('inp-claim');
+    const inpPlatform = document.getElementById('inp-platform');
+    const inpUrl = document.getElementById('inp-url');
+    const inpTrue = document.getElementById('inp-true');
+    const inpFalse = document.getElementById('inp-false');
+    const inpLacks = document.getElementById('inp-lacks');
+    const inpUnproven = document.getElementById('inp-unproven');
+
+    const prevTitle = document.getElementById('prev-title');
+    const prevSubtitle = document.getElementById('prev-subtitle');
+    const prevVerdictBox = document.getElementById('prev-verdict-box');
+    const prevVerdictBadge = document.getElementById('prev-verdict-badge');
+    const prevVerdictText = document.getElementById('prev-verdict-text');
+    const prevEmbedPlatform = document.getElementById('prev-embed-platform');
+    const prevEmbedClaim = document.getElementById('prev-embed-claim');
+    const prevDetailTrue = document.getElementById('prev-detail-true');
+    const prevDetailFalse = document.getElementById('prev-detail-false');
+    const prevDetailLacks = document.getElementById('prev-detail-lacks');
+    const prevDetailUnproven = document.getElementById('prev-detail-unproven');
+
+    function updatePreview() {
+      if (prevTitle && inpTitle) prevTitle.innerText = inpTitle.value || '[Título del Análisis]';
+      if (prevSubtitle && inpSubtitle) prevSubtitle.innerText = inpSubtitle.value || '[Subtítulo explicativo del análisis]';
+      if (prevEmbedClaim && inpClaim) prevEmbedClaim.innerText = inpClaim.value ? '"' + inpClaim.value + '"' : '"[Texto de la afirmación viral]"';
+      if (prevEmbedPlatform && inpPlatform) prevEmbedPlatform.innerText = inpPlatform.value || 'Red Social';
+
+      if (prevDetailTrue && inpTrue) prevDetailTrue.innerText = inpTrue.value || '[Escribe datos que sean correctos]';
+      if (prevDetailFalse && inpFalse) prevDetailFalse.innerText = inpFalse.value || '[Escribe datos falsificados desmentidos]';
+      if (prevDetailLacks && inpLacks) prevDetailLacks.innerText = inpLacks.value || '[Contexto legal omitido]';
+      if (prevDetailUnproven && inpUnproven) prevDetailUnproven.innerText = inpUnproven.value || '[Aseveraciones sin verificar]';
+
+      if (inpVerdict && prevVerdictBadge && prevVerdictBox) {
+        const val = inpVerdict.value;
+        prevVerdictBadge.innerText = val;
+        prevVerdictBadge.className = 'verdict-badge ' + val.toLowerCase().replace(' ', '-');
+
+        // Quitar clases previas del box
+        prevVerdictBox.className = 'cyber-card';
+        if (val === 'Falso') {
+          prevVerdictBox.classList.add('rose');
+          if (prevVerdictText) prevVerdictText.innerText = 'Este claim contradice los datos oficiales y registros públicos disponibles.';
+        } else if (val === 'Verdadero') {
+          prevVerdictBox.classList.add('green');
+          if (prevVerdictText) prevVerdictText.innerText = 'Los datos y documentos oficiales respaldan plenamente esta afirmación.';
+        } else if (val === 'Engañoso') {
+          prevVerdictBox.classList.add('amber');
+          if (prevVerdictText) prevVerdictText.innerText = 'La afirmación mezcla datos reales con interpretaciones sesgadas para desinformar.';
+        } else {
+          prevVerdictBox.classList.add('blue');
+          if (prevVerdictText) prevVerdictText.innerText = 'La información presentada carece de los datos de contexto necesarios para entenderla.';
+        }
+      }
+    }
+
+    const inputs = [inpTitle, inpSubtitle, inpVerdict, inpClaim, inpPlatform, inpUrl, inpTrue, inpFalse, inpLacks, inpUnproven];
+    inputs.forEach(input => {
+      if (input) {
+        input.addEventListener('input', updatePreview);
+        input.addEventListener('change', updatePreview);
+      }
+    });
+
+    updatePreview();
+  });
+</script>
+
+<script is:inline>
+  function triggerBuild() {
+    const box = document.getElementById('build-status-box');
+    const btn = document.getElementById('build-btn');
+
+    if (box && btn) {
+      box.style.display = 'block';
+      btn.innerText = 'Compilando...';
+      btn.disabled = true;
+
+      // Simular retraso de build
+      setTimeout(() => {
+        btn.innerText = '¡Compilado! ✓';
+        btn.disabled = false;
+        setTimeout(() => {
+          btn.innerText = ' Compilar SSG (Astro Build)';
+          box.style.display = 'none';
+        }, 3000);
+      }, 2500);
+    }
+  }
+
+  window.runAdminJob = async function(jobName) {
+    const terminal = document.getElementById('admin-terminal-body');
+    const termTitle = document.getElementById('terminal-job-title');
+    const termStatus = document.getElementById('terminal-status');
+
+    if (!terminal || !termTitle || !termStatus) return;
+
+    const cleanBase = window.location.pathname.includes('/pro/matiza') ? '/pro/matiza' : '';
+
+    // Bloquear todos los botones de la consola para evitar solapamientos
+    const allButtons = document.querySelectorAll('button.cyber-btn');
+    allButtons.forEach(btn => { if (btn) btn.disabled = true; });
+
+    termTitle.innerText = `TERMINAL@MATIZA:~$ running ${jobName.toUpperCase()}...`;
+    termStatus.innerText = 'EJECUTANDO';
+    termStatus.style.color = 'var(--neon-amber)';
+
+    terminal.innerHTML = '<div style="color: var(--neon-blue);">> Conectando con el motor de la VPS y preparando flujo...</div>';
+
+    try {
+      let response = await fetch(`${cleanBase}/api/run-job/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ job: jobName })
+      });
+
+      // Fallback si no hereda base path
+      if (!response.ok && !cleanBase) {
+        const altResponse = await fetch(`/pro/matiza/api/run-job/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ job: jobName })
+        });
+        if (altResponse.ok) {
+          response = altResponse;
+        }
+      }
+
+      if (!response.body) {
+        terminal.innerHTML += '<div style="color: var(--neon-rose);">> Error: El servidor no devolvió un flujo de datos.</div>';
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (line.trim()) {
+            try {
+              const data = JSON.parse(line);
+              const row = document.createElement('div');
+              row.style.wordBreak = 'break-all';
+
+              if (data.status === 'success') {
+                row.style.color = '#00ffc4'; // neon green
+                termStatus.innerText = 'ÉXITO';
+                termStatus.style.color = '#00ffc4';
+              } else if (data.status === 'error') {
+                row.style.color = '#ff3366'; // neon rose
+                termStatus.innerText = 'ERROR';
+                termStatus.style.color = '#ff3366';
+              } else if (data.status === 'warn') {
+                row.style.color = '#ffb020'; // neon amber
+              } else {
+                row.style.color = '#a9b2c3';
+              }
+
+              row.innerText = `> ${data.message}`;
+              terminal.appendChild(row);
+              terminal.scrollTop = terminal.scrollHeight;
+            } catch (jsonErr) {
+              const row = document.createElement('div');
+              row.innerText = line;
+              terminal.appendChild(row);
+              terminal.scrollTop = terminal.scrollHeight;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      terminal.innerHTML += `<div style="color: var(--neon-rose);">> Error de conexión con la API de la VPS: ${err.message}</div>`;
+      termStatus.innerText = 'ERROR';
+      termStatus.style.color = '#ff3366';
+    } finally {
+      const allButtons = document.querySelectorAll('button.cyber-btn');
+      allButtons.forEach(btn => { if (btn) btn.disabled = false; });
+    }
+  };
+</script>
+
+</style>

@@ -1,0 +1,298 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { getDatabase } from '../lib/db.js';
+
+export const prerender = true;
+
+const db = getDatabase();
+
+// Cargar todos los artículos publicados en la vertical de Consumo
+const articles = db.prepare(`
+  SELECT a.*, t.title as topic_title, t.slug as topic_slug
+  FROM articles a
+  INNER JOIN topics t ON a.topic_id = t.id
+  WHERE a.status = 'publicado' AND (t.theme_id = 'theme-dinero' OR t.category LIKE '%Consumo%' OR t.category LIKE '%Estafas%' OR a.category LIKE '%Consumo%')
+  ORDER BY a.published_at DESC, a.created_at DESC
+`).all() as any[];
+
+db.close();
+
+// Mapa de veredicto a color neón
+const getVerdictClass = (verdict) => {
+  const v = (verdict || '').toLowerCase();
+  if (v.includes('verdadero')) return 'green';
+  if (v.includes('falso')) return 'rose';
+  if (v.includes('engañoso') || v.includes('contexto')) return 'amber';
+  return 'purple';
+};
+
+function getRelativeTime(dateString) {
+  if (!dateString) return 'hace un momento';
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  if (isNaN(diffMs)) return 'hace un momento';
+  const diffMin = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffMin < 1) return 'hace unos segundos';
+  if (diffMin < 60) return `hace ${diffMin} min`;
+  if (diffHours < 24) return `hace ${diffHours} h`;
+  return `hace ${diffDays} días`;
+}
+
+const base = import.meta.env.BASE_URL;
+const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base;
+---
+
+<Layout 
+  title="MATIZA Consumo — Verificación de Promociones y Productos" 
+  description="Auditoría independiente sobre afirmaciones de marcas, productos virales, publicidad encubierta y alertas de consumo."
+>
+  <div class="labs-hero" style="position: relative; overflow: hidden; padding: 5rem 1.5rem 4rem 1.5rem; background: radial-gradient(circle at 50% 0%, rgba(157, 78, 221, 0.04) 0%, rgba(7, 9, 19, 0) 70%); border-bottom: 1px solid var(--border-color);">
+    <div class="container" style="max-width: 1000px; margin: 0 auto; text-align: center;">
+      <div class="badge" style="font-family: monospace; font-size: 0.65rem; color: var(--neon-purple); border: 1px solid var(--neon-purple); padding: 0.25rem 0.6rem; border-radius: 4px; display: inline-block; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 0.1em; background: rgba(157, 78, 221, 0.02); box-shadow: 0 0 10px rgba(157, 78, 221, 0.15);">
+        LAB-02 / CONSUMO
+      </div>
+      <h1 style="font-family: var(--font-title); font-size: 2.8rem; font-weight: 900; letter-spacing: -0.04em; color: #fff; margin: 0 0 1rem 0; text-transform: uppercase; line-height: 1.1;">
+        MATIZA CONSUMO
+      </h1>
+      <p style="font-size: 1.05rem; color: var(--text-muted); line-height: 1.6; max-width: 650px; margin: 0 auto;">
+        Cortafuegos contra el fraude y la publicidad engañosa comercial. Verificamos afirmaciones de productos milagro, descuentos en e-commerce y publicidad encubierta en redes.
+      </p>
+    </div>
+  </div>
+
+  <!-- INTERACTIVO: EXPLORADOR DE CASOS DE CONSUMO MOCK -->
+  <div class="container" style="max-width: 1000px; margin: 0 auto; padding: 3rem 1.5rem;">
+    
+    <div style="text-align: center; margin-bottom: 2.5rem;">
+      <span style="font-family: monospace; font-size: 0.6rem; color: var(--neon-purple); letter-spacing: 0.05em; text-transform: uppercase;">Simulador de Verificación</span>
+      <h2 style="font-family: var(--font-title); color: #fff; font-size: 1.6rem; font-weight: 850; text-transform: uppercase; margin: 0.25rem 0 0.5rem 0; letter-spacing: -0.02em;">
+        Cómo audita MATIZA los fraudes comerciales
+      </h2>
+      <p style="font-size: 0.85rem; color: var(--text-muted); max-width: 500px; margin: 0 auto;">
+        Selecciona una alerta frecuente y explora el contraste de datos comerciales, veredictos y regulación de la UE.
+      </p>
+    </div>
+
+    <!-- Selectores del Caso -->
+    <div style="display: flex; justify-content: center; gap: 0.75rem; margin-bottom: 2rem; flex-wrap: wrap;">
+      <button class="promo-btn active" data-promo="descuentos" style="font-family: var(--font-title); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; padding: 0.6rem 1.2rem; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; color: #fff; cursor: pointer; transition: all 0.2s;">
+        [ Descuentos Inflados ]
+      </button>
+      <button class="promo-btn" data-promo="suplementos" style="font-family: var(--font-title); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; padding: 0.6rem 1.2rem; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-muted); cursor: pointer; transition: all 0.2s;">
+        [ Suplementos Milagro ]
+      </button>
+      <button class="promo-btn" data-promo="influencer" style="font-family: var(--font-title); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; padding: 0.6rem 1.2rem; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-muted); cursor: pointer; transition: all 0.2s;">
+        [ Publicidad Encubierta ]
+      </button>
+    </div>
+
+    <!-- Panel del Explorador de Casos -->
+    <div style="background: rgba(18, 22, 41, 0.4); border: 1px solid var(--border-color); padding: 2rem; border-radius: 16px; backdrop-filter: blur(20px);">
+      <div id="promo-content-box">
+        <!-- Contenido dinámico inyectado por JS -->
+      </div>
+    </div>
+
+  </div>
+
+  <div class="container" style="max-width: 680px; margin: 0 auto; padding: 1rem 1.5rem 6rem 1.5rem;">
+    
+    <!-- Listado de Artículos (Dinámico) -->
+    <div style="display: flex; flex-direction: column; gap: 1.5rem; margin-bottom: 4rem;">
+      <h2 style="font-family: var(--font-title); color: #fff; font-size: 1.2rem; font-weight: 850; text-transform: uppercase; letter-spacing: -0.01em; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+        Alertas de Consumo Auditadas
+      </h2>
+      
+      {articles.map(art => (
+        <article class={`cyber-card ${getVerdictClass(art.verdict)}`} style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; transition: transform 0.2s ease, box-shadow 0.2s ease;">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+              <span class={`verdict-badge ${art.verdict.toLowerCase().replace(' ', '-')}`} style="font-size: 0.65rem; padding: 0.15rem 0.4rem;">
+                {art.verdict}
+              </span>
+              <a 
+                href={`${cleanBase}/tema/${art.topic_slug || 'general'}`}
+                style="font-size: 0.7rem; font-weight: bold; color: var(--neon-blue); text-decoration: none; text-transform: uppercase;"
+              >
+                #{art.topic_title || 'General'}
+              </a>
+            </div>
+            <time style="font-size: 0.75rem; color: var(--text-muted);" datetime={art.published_at || art.created_at}>
+              Incorporado {getRelativeTime(art.published_at)}
+            </time>
+          </div>
+
+          <div>
+            <h2 style="font-size: 1.35rem; margin-top: 0; margin-bottom: 0.35rem; font-weight: 750; font-family: var(--font-title); line-height: 1.25;">
+              <a href={`${cleanBase}/noticia/${art.slug}`} style="color: var(--text-main); text-decoration: none; transition: color 0.15s;">
+                {art.title}
+              </a>
+            </h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; line-height: 1.4; margin: 0 0 0.75rem 0;">
+              {art.subtitle}
+            </p>
+            {art.claim && (
+              <div style="background: rgba(0,0,0,0.15); border-left: 2px solid var(--border-color); padding: 0.5rem 0.75rem; font-size: 0.8rem; font-style: italic; color: var(--text-muted); margin-bottom: 0.5rem;">
+                <strong>Claim viral:</strong> "{art.claim}"
+              </div>
+            )}
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 0.75rem; font-size: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+            <span>Expediente: <a href={`${cleanBase}/tema/${art.topic_slug}`} style="color: var(--neon-purple); text-decoration: none; font-weight: bold;">{art.topic_title}</a></span>
+            <a href={`${cleanBase}/noticia/${art.slug}`} style="color: var(--neon-blue); text-decoration: none; font-weight: 800; display: inline-flex; align-items: center; gap: 0.25rem;">
+              Auditar hechos e informe &rarr;
+            </a>
+          </div>
+        </article>
+      ))}
+
+      {articles.length === 0 && (
+        <div class="cyber-card" style="padding: 2.5rem; text-align: center; border-color: rgba(255,255,255,0.05); background: rgba(255,255,255,0.005); border-radius: 12px;">
+          <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0; line-height: 1.5;">
+            No hay alertas de consumo publicadas en la base de datos local en este momento.
+          </p>
+        </div>
+      )}
+    </div>
+
+    <!-- Sugerencias y Envío -->
+    <div style="background: linear-gradient(135deg, rgba(7, 9, 19, 0.8), rgba(157, 78, 221, 0.01)); border: 1px solid var(--border-color); padding: 2.5rem; border-radius: 16px; border-top-color: rgba(157, 78, 221, 0.3);">
+      <h3 style="font-family: var(--font-title); color: #fff; font-size: 1.2rem; font-weight: 850; text-transform: uppercase; margin: 0 0 0.75rem 0; letter-spacing: -0.01em;">
+        Registrar alerta de consumo
+      </h3>
+      <p style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1.5rem;">
+        Si has detectado una promoción fraudulenta en redes, publicidad engañosa o valoraciones sospechosas de productos, regístralo a continuación:
+      </p>
+
+      <form style="display: flex; flex-direction: column; gap: 1.25rem;">
+        <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+          <label style="font-size: 0.7rem; font-family: monospace; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">¿Qué anuncio, enlace comercial o producto viral quieres verificar?</label>
+          <input 
+            type="text" 
+            placeholder="Ej. Enlace a una promoción sospechosa de Telegram, Instagram o web..." 
+            style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); padding: 0.85rem 1rem; border-radius: 8px; color: #fff; font-size: 0.85rem; outline: none; width: 100%;"
+            required
+          />
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+          <label style="font-size: 0.7rem; font-family: monospace; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Tu Correo Electrónico</label>
+          <input 
+            type="email" 
+            placeholder="Para notificarte cuando verifiquemos la alerta" 
+            style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); padding: 0.85rem 1rem; border-radius: 8px; color: #fff; font-size: 0.85rem; outline: none; width: 100%;"
+            required
+          />
+        </div>
+        <button 
+          type="submit" 
+          style="background: #ffffff; color: #070913; border: none; font-weight: 850; font-family: var(--font-title); font-size: 0.75rem; text-transform: uppercase; padding: 1rem; border-radius: 8px; cursor: pointer; letter-spacing: 0.05em; transition: all 0.2s;"
+        >
+          Registrar Link Comercial
+        </button>
+      </form>
+    </div>
+
+  </div>
+</Layout>
+
+<script is:inline>
+  const promos = {
+    descuentos: {
+      title: "Monitoreo de Precios en Black Friday",
+      claim: "Una tienda de tecnología online anuncia un descuento del 45% en un portátil durante la campaña de rebajas oficiales.",
+      verdict: "Falso",
+      verdict_class: "rose",
+      commercial_basis: "Artículo 20 de la Ley de Ordenación del Comercio Minorista en España y la directiva europea 'Omnibus'. El comercio electrónico tiene prohibido inflar el precio de referencia en los 30 días previos para simular descuentos superiores. El precio original de comparación debe ser obligatoriamente el precio más bajo aplicado por la tienda en ese mes anterior.",
+      questions: [
+        "¿Cuál fue el historial del precio del artículo en los 30 días anteriores a la promoción?",
+        "¿Cumple el etiquetado del e-commerce con la ley Omnibus mostrando el histórico real?"
+      ]
+    },
+    suplementos: {
+      title: "Afirmaciones Científicas de Suplementos",
+      claim: "Una marca de colágeno hidrolizado asegura en redes que su producto 'regenera el cartílago de forma definitiva curando la artrosis'.",
+      verdict: "Sin Pruebas",
+      verdict_class: "purple",
+      commercial_basis: "Reglamento (CE) 1924/2006 de la UE sobre declaraciones nutricionales y de propiedades saludables de los alimentos. Ningún suplemento alimenticio puede atribuirse propiedades de prevención, tratamiento o curación de enfermedades humanas sin el aval expreso de ensayos clínicos aprobados por la EFSA (Autoridad Europea de Seguridad Alimentaria).",
+      questions: [
+        "¿Cuáles son los estudios clínicos aleatorizados y doble ciego publicados por la EFSA que avalan esta afirmación?",
+        "¿Ha sido el producto reportado por la AEMPS por publicidad médica no autorizada?"
+      ]
+    },
+    influencer: {
+      title: "Publicidad Encubierta de Creadores",
+      claim: "Un influencer de viajes publica un video recomendando una cadena hotelera asegurando que es una 'recomendación 100% personal y desinteresada'.",
+      verdict: "Engañoso",
+      verdict_class: "amber",
+      commercial_basis: "Ley de Competencia Desleal y la Ley de Servicios de la Sociedad de la Información (LSSI) de España. Se prohíbe taxativamente encubrir colaboraciones pagadas. Si existe contraprestación económica, descuento, estancia gratuita o comisión, el contenido debe incluir de forma visible y clara la etiqueta indicativa de publicidad (ej. #AD o #Patrocinado).",
+      questions: [
+        "¿Existe un acuerdo de patrocinio, intercambio comercial o link de afiliación con la marca?",
+        "¿Se incluyó de forma clara y visible al inicio de la descripción la etiqueta de patrocinio exigida por Autocontrol?"
+      ]
+    }
+  };
+
+  const promoButtons = document.querySelectorAll('.promo-btn');
+  const promoContentBox = document.getElementById('promo-content-box');
+
+  function renderPromo(key) {
+    const p = promos[key];
+    promoContentBox.innerHTML = `
+      <div style="display: flex; flex-direction: column; gap: 1.25rem; animation: slideIn 0.2s ease-out forwards;">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 0.75rem;">
+          <h3 style="font-family: var(--font-title); color: #fff; font-size: 1.25rem; font-weight: 850; margin: 0; text-transform: uppercase;">${p.title}</h3>
+          <span class="verdict-badge ${p.verdict_class}" style="font-size: 0.6rem; padding: 0.15rem 0.45rem;">[VEREDICTO: ${p.verdict.toUpperCase()}]</span>
+        </div>
+        <div>
+          <span style="font-family: monospace; font-size: 0.6rem; color: var(--text-muted); text-transform: uppercase; display: block; margin-bottom: 0.25rem;">[ DECLARACIÓN DE MARCA / ANUNCIO ]</span>
+          <p style="font-size: 0.85rem; color: #fff; margin: 0; font-style: italic; line-height: 1.45;">"${p.claim}"</p>
+        </div>
+        <div>
+          <span style="font-family: monospace; font-size: 0.6rem; color: var(--neon-purple); text-transform: uppercase; display: block; margin-bottom: 0.25rem;">[ COTEJO ADMINISTRATIVO / LEY DE CONSUMO ]</span>
+          <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0; line-height: 1.55;">${p.commercial_basis}</p>
+        </div>
+        <div style="border-top: 1px solid rgba(255,255,255,0.06); padding-top: 0.75rem;">
+          <span style="font-family: monospace; font-size: 0.6rem; color: var(--neon-blue); text-transform: uppercase; display: block; margin-bottom: 0.5rem;">[ PREGUNTAS CRÍTICAS PARA LA COMPRA ]</span>
+          <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+            ${p.questions.map(q => `
+              <div style="background: rgba(0, 240, 255, 0.05); border: 1px solid rgba(0, 240, 255, 0.15); border-radius: 6px; padding: 0.5rem 0.75rem; font-size: 0.72rem; color: #fff; line-height: 1.35;">${q}</div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  promoButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      promoButtons.forEach(b => {
+        b.style.color = 'var(--text-muted)';
+        b.classList.remove('active');
+      });
+      btn.style.color = '#fff';
+      btn.classList.add('active');
+      
+      const key = btn.getAttribute('data-promo');
+      renderPromo(key);
+    });
+  });
+
+  // Render inicial
+  renderPromo('descuentos');
+</script>
+
+<style is:global>
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  article:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(157, 78, 221, 0.05);
+  }
+</style>

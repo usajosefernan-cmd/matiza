@@ -1,0 +1,19 @@
+{
+  "minimum_virality_score": 4.0,
+  "minimum_harm_score": 3.0,
+  "minimum_public_interest_score": 5.0,
+  "priority_levels": {
+    "alta": {
+      "min_interest": 8.0,
+      "min_harm": 7.0
+    },
+    "media": {
+      "min_interest": 5.0,
+      "min_harm": 4.0
+    },
+    "baja": {
+      "min_interest": 3.0,
+      "min_harm": 2.0
+    }
+  }
+}

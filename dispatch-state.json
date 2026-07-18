@@ -1,0 +1,23 @@
+{
+  "project_name": "MATIZA (Plan guia/ Fase 0-17)",
+  "last_updated": "2026-07-17T13:45:00.000Z",
+  "supervisor": "AETHER (Hermes)",
+  "code_agent": "Antigravity (agy CLI)",
+  "active_sessions": [],
+  "completed": [
+    {
+      "task_id": "f0-auditoria",
+      "agent": "Antigravity",
+      "status": "completed",
+      "report": "guia/reports/f0_auditoria_report.md",
+      "validated_by": "AETHER",
+      "validated_at": "2026-07-17T13:45:00.000Z"
+    }
+  ],
+  "worktrees": {
+    "main": {
+      "path": ".",
+      "task_id": null
+    }
+  }
+}

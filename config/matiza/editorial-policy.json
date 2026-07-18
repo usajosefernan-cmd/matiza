@@ -1,0 +1,23 @@
+{
+  "name": "Código Deontológico y Política Editorial MATIZA",
+  "principles": [
+    "Neutralidad metodológica y objetividad factual.",
+    "Contraste obligatorio con fuentes oficiales primarias del Estado y de la Unión Europea.",
+    "Explicación transparente de la incertidumbre cuando no existan datos oficiales disponibles.",
+    "Detección y desvelado explícito de sesgos comerciales, patrocinios y enlaces de afiliados.",
+    "Derecho de rectificación rápido y visible ante errores contrastados."
+  ],
+  "allowed_verdicts": [
+    "Confirmado",
+    "Respaldado por fuentes",
+    "Falta contexto",
+    "Engañoso",
+    "Sin pruebas suficientes",
+    "Versiones contradictorias",
+    "Pendiente de investigación",
+    "No verificable todavía",
+    "Requiere revisión humana",
+    "Sentencia no firme",
+    "Acusación no probada"
+  ]
+}

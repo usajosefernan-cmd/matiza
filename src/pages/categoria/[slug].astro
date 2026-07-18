@@ -1,0 +1,553 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { getDatabase } from '../../lib/db.js';
+import path from 'node:path';
+
+export async function getStaticPaths() {
+    const db = getDatabase();
+  
+  const rawArticles = db.prepare("SELECT category FROM articles WHERE status = 'publicado'").all() as any[];
+  const rawTopics = db.prepare("SELECT category FROM topics WHERE status = 'activo'").all() as any[];
+  db.close();
+
+  const categories = [...new Set([
+    ...rawArticles.map(art => art.category),
+    ...rawTopics.map(t => t.category)
+  ])].filter(Boolean);
+
+  return categories.map(cat => {
+    const slug = cat.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+    return {
+      params: { slug },
+      props: { categoryName: cat }
+    };
+  });
+}
+
+const { slug } = Astro.params;
+const { categoryName } = Astro.props;
+
+const db = getDatabase();
+
+
+// Cargar todos los artículos de esta categoría
+const articles = db.prepare(`
+  SELECT a.*, t.title as topic_title, t.slug as topic_slug
+  FROM articles a
+  LEFT JOIN topics t ON a.topic_id = t.id
+  WHERE a.status = 'publicado' AND a.category = ?
+  ORDER BY a.published_at DESC, a.created_at DESC
+`).all(categoryName) as any[];
+
+// Calcular estadísticas básicas en caliente de la categoría
+const stats = {
+  total: articles.length,
+  falsos: articles.filter(a => (a.verdict || '').toLowerCase().includes('falso')).length,
+  verdaderos: articles.filter(a => (a.verdict || '').toLowerCase().includes('verdadero')).length,
+  enganosos: articles.filter(a => (a.verdict || '').toLowerCase().includes('engañoso') || (a.verdict || '').toLowerCase().includes('contexto')).length
+};
+
+const veracidadRate = stats.total > 0 ? Math.round(((stats.total - stats.falsos) / stats.total) * 100) : 100;
+
+// Mapear áreas para propuestas políticas electorales
+let areaMapping = [];
+const lowerCat = categoryName.toLowerCase();
+if (lowerCat.includes('vivienda')) {
+  areaMapping = ['Vivienda'];
+} else if (lowerCat.includes('inmigra') || lowerCat.includes('menas') || lowerCat.includes('migr')) {
+  areaMapping = ['Inmigración'];
+} else if (lowerCat.includes('econ') || lowerCat.includes('impues') || lowerCat.includes('paro') || lowerCat.includes('empleo') || lowerCat.includes('fiscal')) {
+  areaMapping = ['Economáa', 'Fiscalidad', 'Pensiones'];
+} else if (lowerCat.includes('justic') || lowerCat.includes('corrup') || lowerCat.includes('leyes') || lowerCat.includes('amnistia')) {
+  areaMapping = ['Justicia'];
+}
+
+let policyMeasures = [];
+if (areaMapping.length > 0) {
+  const placeholders = areaMapping.map(() => '?').join(',');
+  policyMeasures = db.prepare(`
+    SELECT pm.*, p.name as party_name, p.slug as party_slug
+    FROM policy_measures pm
+    JOIN parties p ON pm.party_id = p.id
+    WHERE pm.area IN (${placeholders})
+    LIMIT 20
+  `).all(...areaMapping) as any[];
+}
+
+db.close();
+
+// Glosario didáctico adaptado a jóvenes
+const educationalGlosario = {
+  'sociedad-y-migracion': [
+    {
+      title: 'í Okupación ilegal vs Allanamiento de Morada',
+      content: 'En España el allanamiento de morada (entrar en la casa donde vive alguien habitualmente, incluyendo segundas viviendas) es un delito grave y la policía desaloja de inmediato sin necesidad de orden judicial. La usurpación (ocupar un piso de banco o constructora vacío) sí requiere proceso judicial por no constituir morada.'
+    },
+    {
+      title: ' El Ingreso Mínimo Vital para Extranjeros',
+      content: 'Los ciudadanos extranjeros en España no pueden acceder a ayudas directas o al IMV de forma irregular. La ley de la Seguridad Social exige acreditar residencia legal y continuada en el territorio nacional durante al menos un año previo a la solicitud.'
+    }
+  ],
+  'economia-e-impuestos': [
+    {
+      title: ' Cotización por Ingresos Reales (Autánomos)',
+      content: 'Desde 2023 rige un sistema progresivo de 15 tramos donde los autónomos cotizan según sus ingresos netos reales declarados a Hacienda, permitiendo cuotas reducidas de 225 para ingresos bajos y tramos de hasta 530 para ingresos superiores a 6.000.'
+    },
+    {
+      title: ' Cuentas bancarias abandonadas tras 20 años',
+      content: 'Hacienda no confisca depásitos de forma arbitraria. Los saldos en cuentas sin ningán movimiento ni reclamación durante 20 años consecutivos pasan al Tesoro público por ley, destinándose ántegramente a becas de estudio y personas con discapacidad.'
+    }
+  ],
+  'justicia-y-politica': [
+    {
+      title: ' Fase de Instrucción vs Sentencia Penal',
+      content: 'Estar investigado o imputado (fase de instrucción) significa que un juez recaba indicios o pruebas, bajo la presunción de inocencia. La culpabilidad o condena solo se establece mediante una sentencia judicial firme tras la celebración del juicio oral.'
+    }
+  ],
+  'corrupcion-publica': [
+    {
+      title: ' Malversación y Cohecho en el Código Penal',
+      content: 'La malversación castiga el desváo o uso ilácito de caudales públicos por parte de funcionarios. El cohecho penaliza la entrega o aceptación de dádivas o mordidas a cambio de favores o concesiones administrativas.'
+    }
+  ],
+  'historia-y-leyes': [
+    {
+      title: ' El origen histórico del Instituto Nacional de Previsión',
+      content: 'Fundado en 1908 bajo el reinado de Alfonso XIII, el INP fue el germen de los seguros sociales en España (retiro obrero, seguro de maternidad, etc.), unificados y renombrados posteriormente en 1963 como Seguridad Social.'
+    }
+  ]
+};
+
+const localGlosario = educationalGlosario[slug] || [
+  {
+    title: ' Auditoría Independiente',
+    content: 'Revisión imparcial de datos extraídos directamente de fuentes oficiales del Estado (BOE, INE, ministerios) para contrastar los bulos y afirmaciones de redes.'
+  }
+];
+
+// Mapa de veredicto a color neón
+const getVerdictClass = (verdict) => {
+  const v = (verdict || '').toLowerCase();
+  if (v.includes('verdadero')) return 'green';
+  if (v.includes('falso')) return 'rose';
+  if (v.includes('engañoso') || v.includes('contexto')) return 'amber';
+  return 'purple';
+};
+const base = import.meta.env.BASE_URL;
+const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base;
+---
+
+<Layout title={`Vertical: ${categoryName}`}>
+  <div class="container" style="padding-top: 2rem; padding-bottom: 5rem; max-width: 680px;">
+    
+    <!-- Cabecera Premium -->
+    <div style="margin-bottom: 2rem; border-bottom: 2px solid var(--border-color); padding-bottom: 1.5rem;">
+      <div style="margin-bottom: 0.5rem; font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">
+        <a href={`${cleanBase}/`} style="text-decoration: none; color: var(--text-muted);">MATIZA</a> / <a href={`${cleanBase}/temas`} style="text-decoration: none; color: var(--text-muted);">Verticales</a> / <span style="color: var(--neon-blue);">{categoryName}</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+        <span style="font-size: 2.2rem;"></span>
+        <h1 style="font-size: 2.5rem; margin: 0; font-family: var(--font-title); font-weight: 850; letter-spacing: -0.02em;">
+          Vertical: <span class="text-gradient-blue">{categoryName}</span>
+        </h1>
+      </div>
+      <p style="color: var(--text-muted); font-size: 1rem; margin-top: 0.5rem; margin-bottom: 0; line-height: 1.4;">
+        Expediente de control, verificación de bulos y propuestas de partidos en el área de {categoryName}.
+      </p>
+    </div>
+
+    <!-- Mení de Pestaáas Cyberpunk -->
+    <div class="topic-tabs-nav">
+      <button class="tab-btn active" data-target="panel-desmentidos"> Desmentidos ({stats.total})</button>
+      <button class="tab-btn" data-target="panel-metricas"> Datos & Métricas</button>
+      <button class="tab-btn" data-target="panel-politica"> Medidas Políticas ({policyMeasures.length})</button>
+      <button class="tab-btn" data-target="panel-glosario"> Glosario y Leyes</button>
+    </div>
+
+    <!-- PANEL 1: DESMENTIDOS -->
+    <div id="panel-desmentidos" class="topic-tab-panel active">
+      <!-- Buscador y Filtros interactivos -->
+      <div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; background: rgba(18, 22, 41, 0.4); padding: 1rem; border-radius: 12px; border: 1px solid var(--border-color);">
+        <div style="flex: 1; min-width: 250px; position: relative;">
+          <input type="text" id="cat-search" placeholder="Buscar bulo o claim en esta categoría..." 
+            style="width: 100%; padding: 0.65rem 1rem; background: rgba(0,0,0,0.5); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-main); font-size: 0.85rem; outline: none; transition: border-color 0.2s;" />
+        </div>
+        <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+          <button class="filter-chip active" data-verdict="todos">Todos</button>
+          <button class="filter-chip" data-verdict="falso" style="border-color: var(--neon-rose); color: var(--neon-rose);"> Bulos</button>
+          <button class="filter-chip" data-verdict="contexto" style="border-color: var(--neon-amber); color: var(--neon-amber);"> Sesgados</button>
+          <button class="filter-chip" data-verdict="verdadero" style="border-color: var(--neon-green); color: var(--neon-green);"> Verificados</button>
+        </div>
+      </div>
+
+      <div id="articles-feed" style="display: flex; flex-direction: column; gap: 1.5rem;">
+        {articles.map(art => (
+          <article class={`cyber-card ${getVerdictClass(art.verdict)}`} data-verdict={(art.verdict || '').toLowerCase()} data-title={(art.title || '').toLowerCase() + ' ' + (art.subtitle || '').toLowerCase()} style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+              <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <span class={`verdict-badge ${art.verdict.toLowerCase().replace(' ', '-')}`} style="font-size: 0.65rem; padding: 0.15rem 0.4rem;">
+                  {art.verdict}
+                </span>
+                <span style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); text-transform: uppercase;">
+                  {art.category}
+                </span>
+              </div>
+              <time style="font-size: 0.75rem; color: var(--text-muted);">
+                {new Date(art.published_at || art.created_at).toLocaleDateString('es-ES', {
+                  day: '2-digit',
+                  month: 'long',
+                  year: 'numeric'
+                })}
+              </time>
+            </div>
+
+            <div>
+              <h2 style="font-size: 1.4rem; margin-top: 0; margin-bottom: 0.35rem; font-weight: 750; font-family: var(--font-title); line-height: 1.25;">
+                <a href={`${cleanBase}/noticia/${art.slug}`} style="color: var(--text-main); text-decoration: none; transition: color 0.15s;">
+                  {art.title}
+                </a>
+              </h2>
+              <p style="color: var(--text-muted); font-size: 0.85rem; line-height: 1.4; margin: 0 0 0.75rem 0;">
+                {art.subtitle}
+              </p>
+              {art.multimedia_url && (
+                <div style="margin-bottom: 1rem; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.06); max-height: 220px; background: #000; display: flex; align-items: center; justify-content: center;">
+                  <img src={art.multimedia_url} alt="Portada" style="width: 100%; height: 100%; object-fit: cover; max-height: 220px;" />
+                </div>
+              )}
+              {art.claim && (
+                <div style="background: rgba(0,0,0,0.15); border-left: 2px solid var(--border-color); padding: 0.5rem 0.75rem; font-size: 0.8rem; font-style: italic; color: var(--text-muted); margin-bottom: 0.5rem;">
+                  <strong>Claim viral:</strong> "{art.claim}"
+                </div>
+              )}
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 0.75rem; font-size: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+              {art.topic_title ? (
+                <span>Dossier: <a href={`${cleanBase}/tema/${art.topic_slug}`} style="color: var(--neon-purple); text-decoration: none; font-weight: bold;">{art.topic_title}</a></span>
+              ) : (
+                <span style="color: var(--text-muted);">Expediente suelto</span>
+              )}
+              <a href={`${cleanBase}/noticia/${art.slug}`} style="color: var(--neon-blue); text-decoration: none; font-weight: 800; display: inline-flex; align-items: center; gap: 0.2rem; text-decoration: none;">
+                Auditar hechos e informe &rarr;
+              </a>
+            </div>
+          </article>
+        ))}
+
+        {articles.length === 0 && (
+          <div class="cyber-card" style="padding: 3rem; text-align: center; border-color: rgba(255,255,255,0.05);">
+            <p style="color: var(--text-muted); font-size: 1rem; margin: 0;">No se han publicado desmentidos todaváa bajo esta categoría.</p>
+          </div>
+        )}
+      </div>
+    </div>
+
+    <!-- PANEL 2: DATOS Y MáTRICAS -->
+    <div id="panel-metricas" class="topic-tab-panel">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
+        <div class="cyber-card" style="padding: 1.5rem; background: rgba(7, 9, 19, 0.4); text-align: center; border-color: var(--neon-blue);">
+          <span style="font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); display: block; margin-bottom: 0.25rem;">Bulos Auditados</span>
+          <span style="font-size: 2.5rem; font-weight: 900; color: var(--neon-blue); text-shadow: 0 0 10px rgba(0, 240, 255, 0.2);">{stats.total}</span>
+        </div>
+        <div class="cyber-card" style="padding: 1.5rem; background: rgba(7, 9, 19, 0.4); text-align: center; border-color: var(--neon-rose);">
+          <span style="font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); display: block; margin-bottom: 0.25rem;">Claims Falsos</span>
+          <span style="font-size: 2.5rem; font-weight: 900; color: var(--neon-rose); text-shadow: 0 0 10px rgba(255, 51, 102, 0.2);">{stats.falsos}</span>
+        </div>
+        <div class="cyber-card" style="padding: 1.5rem; background: rgba(7, 9, 19, 0.4); text-align: center; border-color: var(--neon-green);">
+          <span style="font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); display: block; margin-bottom: 0.25rem;">Tasa de Veracidad</span>
+          <span style="font-size: 2.5rem; font-weight: 900; color: var(--neon-green); text-shadow: 0 0 10px rgba(0, 245, 160, 0.2);">{veracidadRate}%</span>
+        </div>
+      </div>
+
+      <div class="cyber-card" style="padding: 1.5rem; background: linear-gradient(135deg, rgba(0, 240, 255, 0.03) 0%, rgba(7, 9, 19, 0.95) 100%);">
+        <h3 style="font-size: 1.15rem; font-weight: 700; color: var(--neon-blue); margin-top: 0; margin-bottom: 1rem;">Distribución de Veredictos del Sector</h3>
+        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+          <div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.25rem;">
+              <span style="color: var(--text-main); font-weight: 600;">Falsos (Bulos absolutos)</span>
+              <span style="color: var(--neon-rose); font-weight: 700;">{stats.falsos} ({stats.total > 0 ? Math.round((stats.falsos/stats.total)*100) : 0}%)</span>
+            </div>
+            <div style="background: rgba(0,0,0,0.4); height: 6px; border-radius: 4px; overflow: hidden; border: 1px solid var(--border-color);">
+              <div style={`background: var(--neon-rose); width: ${stats.total > 0 ? (stats.falsos/stats.total)*100 : 0}%; height: 100%;`}></div>
+            </div>
+          </div>
+          <div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.25rem;">
+              <span style="color: var(--text-main); font-weight: 600;">Engañosos / Falta Contexto</span>
+              <span style="color: var(--neon-amber); font-weight: 700;">{stats.enganosos} ({stats.total > 0 ? Math.round((stats.enganosos/stats.total)*100) : 0}%)</span>
+            </div>
+            <div style="background: rgba(0,0,0,0.4); height: 6px; border-radius: 4px; overflow: hidden; border: 1px solid var(--border-color);">
+              <div style={`background: var(--neon-amber); width: ${stats.total > 0 ? (stats.enganosos/stats.total)*100 : 0}%; height: 100%;`}></div>
+            </div>
+          </div>
+          <div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.25rem;">
+              <span style="color: var(--text-main); font-weight: 600;">Verdaderos (Contrastados)</span>
+              <span style="color: var(--neon-green); font-weight: 700;">{stats.verdaderos} ({stats.total > 0 ? Math.round((stats.verdaderos/stats.total)*100) : 0}%)</span>
+            </div>
+            <div style="background: rgba(0,0,0,0.4); height: 6px; border-radius: 4px; overflow: hidden; border: 1px solid var(--border-color);">
+              <div style={`background: var(--neon-green); width: ${stats.total > 0 ? (stats.verdaderos/stats.total)*100 : 0}%; height: 100%;`}></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PANEL 3: AGENDA política -->
+    <div id="panel-politica" class="topic-tab-panel">
+      <div style="background: rgba(157, 78, 221, 0.05); border: 1px solid var(--border-color); padding: 1rem; border-radius: 12px; margin-bottom: 1.5rem;">
+        <p style="color: var(--text-muted); font-size: 0.85rem; line-height: 1.45; margin: 0;">
+           <strong>Auditoráa Electoral:</strong> Contrastamos las medidas y propuestas de los programas electorales de los principales partidos políticos asociadas a esta área con las leyes y el BOE actual para analizar su viabilidad tácnica.
+        </p>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem;">
+        {policyMeasures.map(pm => (
+          <div class="cyber-card" style="padding: 1.25rem; display: flex; flex-direction: column; justify-content: space-between; border-color: rgba(255,255,255,0.05);">
+            <div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <span class={`party-badge ${pm.party_slug}`} style="font-weight: 800; font-size: 0.65rem; text-transform: uppercase;">
+                  {pm.party_name}
+                </span>
+                <span style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold; border: 1px solid var(--border-color); padding: 0.15rem 0.35rem; border-radius: 4px;">
+                  {pm.area}
+                </span>
+              </div>
+              <h4 style="font-size: 0.95rem; font-weight: 750; color: var(--text-main); margin-top: 0; margin-bottom: 0.5rem; line-height: 1.35;">
+                {pm.title}
+              </h4>
+              <p style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.45; margin-bottom: 1rem;">
+                {pm.plain_language_summary}
+              </p>
+              {pm.original_text && (
+                <div style="background: rgba(255, 255, 255, 0.015); border-left: 2px solid var(--neon-blue); padding: 0.5rem 0.75rem; border-radius: 0 6px 6px 0; margin-bottom: 0.75rem; font-size: 0.75rem; color: var(--text-muted); font-style: italic;">
+                  "{pm.original_text}"
+                </div>
+              )}
+            </div>
+            
+            <div style="border-top: 1px solid var(--border-color); padding-top: 0.75rem; display: flex; flex-direction: column; gap: 0.4rem;">
+              <div>
+                <span style="font-size: 0.62rem; text-transform: uppercase; font-weight: 800; display: block; color: var(--neon-green);">Impacto Estimado:</span>
+                <p style="font-size: 0.75rem; color: var(--text-main); line-height: 1.4; margin: 0;">
+                  {pm.possible_impact || 'No especificado'}
+                </p>
+              </div>
+              {pm.target_groups && (
+                <div>
+                  <span style="font-size: 0.62rem; text-transform: uppercase; font-weight: 800; display: block; color: var(--neon-amber);">Colectivos Afectados:</span>
+                  <p style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.4; margin: 0;">
+                    {pm.target_groups}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+
+        {policyMeasures.length === 0 && (
+          <div class="cyber-card" style="padding: 3rem; text-align: center; grid-column: 1 / -1; border-color: rgba(255,255,255,0.05);">
+            <p style="color: var(--text-muted); font-size: 1rem; margin: 0;">No se han mapeado medidas políticas de programas todaváa para esta categoría.</p>
+          </div>
+        )}
+      </div>
+    </div>
+
+    <!-- PANEL 4: GLOSARIO Y LEYES -->
+    <div id="panel-glosario" class="topic-tab-panel">
+      <div style="display: flex; flex-direction: column; gap: 1.25rem;">
+        {localGlosario.map(item => (
+          <div class="cyber-card" style="padding: 1.5rem; border-color: var(--neon-blue); background: linear-gradient(180deg, rgba(7, 9, 19, 0.95) 0%, rgba(18, 22, 41, 0.3) 100%);">
+            <h3 style="font-size: 1.15rem; font-weight: 750; color: var(--neon-blue); margin-top: 0; margin-bottom: 0.75rem;">
+              {item.title}
+            </h3>
+            <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.55; margin: 0;">
+              {item.content}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+
+  </div>
+</Layout>
+
+<script is:inline>
+  document.addEventListener('DOMContentLoaded', () => {
+    // 1. Gestion de Pestaáas
+    const tabButtons = document.querySelectorAll('.topic-tabs-nav .tab-btn');
+    const tabPanels = document.querySelectorAll('.topic-tab-panel');
+
+    tabButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const targetId = btn.getAttribute('data-target');
+        
+        tabButtons.forEach(b => b.classList.remove('active'));
+        tabPanels.forEach(p => p.classList.remove('active'));
+
+        btn.classList.add('active');
+        const targetPanel = document.getElementById(targetId);
+        if (targetPanel) targetPanel.classList.add('active');
+      });
+    });
+
+    // 2. Buscador y Filtros Interactivos en el Cliente
+    const searchInput = document.getElementById('cat-search');
+    const filterChips = document.querySelectorAll('.filter-chip');
+    const articles = document.querySelectorAll('#articles-feed article');
+
+    let activeVerdict = 'todos';
+    let searchQuery = '';
+
+    function applyFilters() {
+      articles.forEach(art => {
+        const verdict = art.getAttribute('data-verdict') || '';
+        const titleText = art.getAttribute('data-title') || '';
+
+        const matchesSearch = titleText.includes(searchQuery);
+        let matchesVerdict = false;
+
+        if (activeVerdict === 'todos') {
+          matchesVerdict = true;
+        } else if (activeVerdict === 'falso') {
+          matchesVerdict = verdict.includes('falso');
+        } else if (activeVerdict === 'contexto') {
+          matchesVerdict = verdict.includes('engañoso') || verdict.includes('contexto');
+        } else if (activeVerdict === 'verdadero') {
+          matchesVerdict = verdict.includes('verdadero');
+        }
+
+        if (matchesSearch && matchesVerdict) {
+          art.style.display = 'flex';
+        } else {
+          art.style.display = 'none';
+        }
+      });
+    }
+
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => {
+        searchQuery = e.target.value.toLowerCase().trim();
+        applyFilters();
+      });
+    }
+
+    filterChips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        filterChips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        activeVerdict = chip.getAttribute('data-verdict');
+        applyFilters();
+      });
+    });
+  });
+</script>
+
+<style>
+  /* Tabs */
+  .topic-tabs-nav {
+    display: flex;
+    gap: 0.5rem;
+    margin: 1.5rem 0 2rem 0;
+    border-bottom: 1px solid var(--border-color);
+    padding: 0.75rem 0.5rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+    position: sticky;
+    top: 64px; /* Justo debajo de la cabecera */
+    z-index: 990;
+    background: rgba(7, 9, 19, 0.95);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    margin-left: -0.5rem;
+    margin-right: -0.5rem;
+  }
+  .topic-tabs-nav::-webkit-scrollbar {
+    height: 4px;
+  }
+  .topic-tabs-nav::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 4px;
+  }
+  .tab-btn {
+    background: transparent;
+    border: none;
+    padding: 0.65rem 1.15rem;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 700;
+    cursor: pointer;
+    border-radius: 8px 8px 0 0;
+    white-space: nowrap;
+    transition: color 0.15s, background 0.15s;
+    border-bottom: 2px solid transparent;
+  }
+  .tab-btn:hover {
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.02);
+  }
+  .tab-btn.active {
+    color: var(--neon-blue);
+    border-bottom: 2px solid var(--neon-blue);
+    background: rgba(0, 240, 255, 0.03);
+  }
+
+  .topic-tab-panel {
+    display: none;
+  }
+  .topic-tab-panel.active {
+    display: block;
+    animation: fadeIn 0.25s ease-in-out;
+  }
+
+  /* Chips de filtro */
+  .filter-chip {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    padding: 0.4rem 0.9rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .filter-chip:hover {
+    color: var(--text-main);
+    background: rgba(255,255,255,0.02);
+  }
+  .filter-chip.active {
+    background: var(--border-color);
+    color: var(--text-main);
+    border-color: var(--text-main);
+  }
+
+  /* Badges de partidos */
+  .party-badge {
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    color: #fff;
+  }
+  .party-badge.pp {
+    background: #002e80;
+    border: 1px solid #0056f6;
+  }
+  .party-badge.psoe {
+    background: #800000;
+    border: 1px solid #ff0000;
+  }
+  .party-badge.vox {
+    background: #244d00;
+    border: 1px solid #4dff00;
+  }
+  .party-badge.sumar {
+    background: #4a004a;
+    border: 1px solid #ff00ff;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+</style>

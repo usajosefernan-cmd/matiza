@@ -1,0 +1,278 @@
+---
+interface Props {
+  draftsWithDetails: any[];
+  activeTopics: any[];
+  getVerdictClass: (verdict: string) => string;
+}
+const { draftsWithDetails, activeTopics, getVerdictClass } = Astro.props;
+---
+
+<h2 class="section-title" style="margin-top: 0; margin-bottom: 1.25rem; font-size: 1.35rem; color: #fff;"> Cola de Moderación: Borradores redactados por IA</h2>
+<div class="cards-list" style="display: flex; flex-direction: column; gap: 1.5rem;">
+  {draftsWithDetails.map(art => (
+    <div class={`cyber-card ${getVerdictClass(art.verdict)}`} style="padding: 1.5rem; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(18, 22, 41, 0.25);">
+      <div class="card-meta" style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem;">
+        <span class={`verdict-badge ${art.verdict.toLowerCase().replace(' ', '-')}`} style="font-size: 0.7rem; font-weight: bold; text-transform: uppercase;">
+          Veredicto sugerido: {art.verdict}
+        </span>
+        <span style="font-size: 0.8rem; color: var(--text-main);">Tema: <strong>{art.topic_title || 'General'}</strong></span>
+        <span style="font-size: 0.8rem; color: var(--text-muted);">Confianza: {art.confidence || 'Media'}</span>
+      </div>
+      
+      {/* Diagnóstico Rápido de Contenido para Moderadores */}
+      {(() => {
+        const hasImage = art.multimedia_url && !art.multimedia_url.includes('unsplash.com/photo-1541872703-74c5e44368f9') && !art.multimedia_url.includes('placeholder');
+        const hasOriginUrl = !!art.origin_url;
+        const hasSources = art.sources && art.sources.length > 0;
+        const hasData = (art.what_is_true && art.what_is_true.trim().length > 15) || (art.what_is_false && art.what_is_false.trim().length > 15);
+        const isExplanationGood = art.explanation && art.explanation.trim().length > 350;
+        const hasVideo = art.origin_url && (art.origin_url.includes('youtube.com') || art.origin_url.includes('youtu.be') || art.origin_url.includes('tiktok.com'));
+
+        return (
+          <div class="quality-diagnostics" style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1.25rem; padding: 0.6rem; border-radius: 8px; background: rgba(0,0,0,0.15); border: 1px solid rgba(255,255,255,0.03);">
+            <span style="font-size: 0.65rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; align-self: center; margin-right: 0.25rem; font-family: monospace;">Salud:</span>
+            
+            {/* 1. Enlace Original */}
+            <span 
+              title={hasOriginUrl ? "Enlace de origen correcto" : "Falta el enlace de origen original"}
+              style={`font-size: 0.7rem; font-family: monospace; font-weight: bold; padding: 0.25rem 0.5rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.3rem; ${hasOriginUrl ? 'background: rgba(57, 255, 20, 0.08); border: 1px solid rgba(57, 255, 20, 0.25); color: #39ff14;' : 'background: rgba(220, 39, 67, 0.08); border: 1px solid rgba(220, 39, 67, 0.25); color: #ff3366;'}`}
+            >
+              {hasOriginUrl ? '🟢' : '🔴'} 🚨 original
+            </span>
+
+            {/* 2. Imagen de Evidencia */}
+            <span 
+              title={hasImage ? "Imagen del bulo correctamente incrustada" : "Falta la imagen del artículo"}
+              style={`font-size: 0.7rem; font-family: monospace; font-weight: bold; padding: 0.25rem 0.5rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.3rem; ${hasImage ? 'background: rgba(57, 255, 20, 0.08); border: 1px solid rgba(57, 255, 20, 0.25); color: #39ff14;' : 'background: rgba(220, 39, 67, 0.08); border: 1px solid rgba(220, 39, 67, 0.25); color: #ff3366;'}`}
+            >
+              {hasImage ? '🟢' : '🔴'} 📷 imagen
+            </span>
+
+            {/* 3. Vídeo */}
+            <span 
+              title={hasVideo ? "Contiene enlace de vídeo (YouTube o TikTok)" : "No se ha detectado vídeo original"}
+              style={`font-size: 0.7rem; font-family: monospace; font-weight: bold; padding: 0.25rem 0.5rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.3rem; ${hasVideo ? 'background: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0, 240, 255, 0.25); color: #00f0ff;' : 'background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); color: var(--text-muted);'}`}
+            >
+              {hasVideo ? '🟢' : '⚪'} 🎥 vídeo
+            </span>
+
+            {/* 4. Enlaces / Fuentes */}
+            <span 
+              title={hasSources ? `Contiene ${art.sources.length} fuentes de evidencia oficiales` : "Falta aportar fuentes de evidencia para el desmentido"}
+              style={`font-size: 0.7rem; font-family: monospace; font-weight: bold; padding: 0.25rem 0.5rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.3rem; ${hasSources ? 'background: rgba(57, 255, 20, 0.08); border: 1px solid rgba(57, 255, 20, 0.25); color: #39ff14;' : 'background: rgba(220, 39, 67, 0.08); border: 1px solid rgba(220, 39, 67, 0.25); color: #ff3366;'}`}
+            >
+              {hasSources ? '🟢' : '🔴'} 🔗 fuentes ({art.sources?.length || 0})
+            </span>
+
+            {/* 5. Cifras y Datos */}
+            <span 
+              title={hasData ? "Contiene cifras y contraste en 'Qué es Verdad' y 'Qué es Mentira'" : "Falta rellenar datos y cifras de contraste"}
+              style={`font-size: 0.7rem; font-family: monospace; font-weight: bold; padding: 0.25rem 0.5rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.3rem; ${hasData ? 'background: rgba(57, 255, 20, 0.08); border: 1px solid rgba(57, 255, 20, 0.25); color: #39ff14;' : 'background: rgba(220, 39, 67, 0.08); border: 1px solid rgba(220, 39, 67, 0.25); color: #ff3366;'}`}
+            >
+              {hasData ? '🟢' : '🔴'} 📊 datos
+            </span>
+
+            {/* 6. Calidad de Redacción */}
+            <span 
+              title={isExplanationGood ? "Redacción detallada y explicativa" : "La explicación es demasiado corta y vaga, requiere ampliarse"}
+              style={`font-size: 0.7rem; font-family: monospace; font-weight: bold; padding: 0.25rem 0.5rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.3rem; ${isExplanationGood ? 'background: rgba(57, 255, 20, 0.08); border: 1px solid rgba(57, 255, 20, 0.25); color: #39ff14;' : 'background: rgba(255, 183, 3, 0.08); border: 1px solid rgba(255, 183, 3, 0.25); color: #ffb703;'}`}
+            >
+              {isExplanationGood ? '🟢' : '🟡'} ✍️ redacción
+            </span>
+          </div>
+        );
+      })()}
+      
+      <div class="card-content" style="margin-bottom: 1rem;">
+        <h3 class="article-title" style="font-size: 1.2rem; margin: 0 0 0.5rem 0; color: #fff;">{art.title}</h3>
+        <p class="article-subtitle" style="font-size: 0.85rem; color: var(--text-muted); margin: 0 0 1rem 0;">{art.subtitle}</p>
+        <div class="claim-block" style="background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 6px; border-left: 3px solid var(--border-color); font-size: 0.85rem; font-style: italic; margin-bottom: 1rem;">
+          <strong>Reclamación original:</strong> "{art.claim}"
+        </div>
+
+        <!-- Origen de la desinformación con enlace directo e imágenes del bulo -->
+        <div class="origin-source-block" style="padding: 0.85rem; border-radius: 8px; background: rgba(255, 51, 102, 0.05); border: 1px solid rgba(255, 51, 102, 0.15); display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: start; margin-top: 0.5rem;">
+          <div style="text-align: left;">
+            <span style="font-size: 0.65rem; font-weight: 800; text-transform: uppercase; color: var(--neon-rose); display: block; margin-bottom: 0.4rem; letter-spacing: 0.05em;">🚨 ORIGEN DEL BULO / POST DETECTADO:</span>
+            {art.origin_summary && (
+              <p style="font-size: 0.8rem; margin: 0 0 0.5rem 0; line-height: 1.4; color: var(--text-muted); font-style: italic;">
+                "{art.origin_summary}"
+              </p>
+            )}
+            <div style="font-size: 0.75rem; color: var(--text-muted);">
+              Plataforma: <strong style="color: #fff;">{art.origin_platform || 'Desconocida'}</strong>
+              {art.origin_url && (
+                <a href={art.origin_url} target="_blank" style="margin-left: 0.75rem; color: #00f0ff; text-decoration: underline; font-weight: bold;">
+                  Ver origen original ({art.origin_platform}) &rarr;
+                </a>
+              )}
+            </div>
+          </div>
+          {art.multimedia_url && (
+            <div style="width: 80px; height: 80px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.08); overflow: hidden; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+              <img src={art.multimedia_url} alt="Imagen del bulo" style="max-width: 100%; max-height: 100%; object-fit: cover; cursor: zoom-in;" onclick={`window.open('${art.multimedia_url}', '_blank')`} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      <!-- Fuentes de Evidencia Clicables directas -->
+      {art.sources && art.sources.length > 0 && (
+        <div class="evidence-sources-list" style="margin-bottom: 1.25rem; padding: 0.75rem; background: rgba(0,0,0,0.15); border-radius: 8px; border: 1px solid rgba(255,255,255,0.03);">
+          <span style="font-size: 0.7rem; font-weight: 800; text-transform: uppercase; color: var(--neon-blue); display: block; margin-bottom: 0.5rem; letter-spacing: 0.05em;">🔗 FUENTES DE EVIDENCIA VERIFICADAS POR LA IA (ENLACES DIRECTOS):</span>
+          <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+            {art.sources.map((src: any) => (
+              <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.8rem; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 0.4rem;">
+                <div style="text-align: left; flex: 1; min-width: 200px;">
+                  <strong style="color: #fff; display: block; font-size: 0.8rem; margin-bottom: 0.15rem;">{src.title}</strong>
+                  <a href={src.url} target="_blank" style="color: #00f0ff; text-decoration: underline; font-family: monospace; font-size: 0.75rem; word-break: break-all;">
+                    {src.url}
+                  </a>
+                </div>
+                <div style="display: flex; gap: 0.35rem; align-items: center; white-space: nowrap;">
+                  <span style="background: rgba(0,240,255,0.08); color: #00f0ff; font-size: 0.6rem; font-weight: bold; padding: 0.15rem 0.35rem; border-radius: 4px; text-transform: uppercase;">{src.source_type}</span>
+                  <span style="background: rgba(57,255,20,0.08); color: #39ff14; font-size: 0.6rem; font-weight: bold; padding: 0.15rem 0.35rem; border-radius: 4px; text-transform: uppercase;">Autoridad: {src.authority_level}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <!-- Botones de Acción Rápida (Aprobar, Rechazar, Borrar Permanente) -->
+      <div style="display: flex; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap;">
+        <form method="POST" style="margin: 0; flex: 1; min-width: 140px;">
+          <input type="hidden" name="action" value="approve" />
+          <input type="hidden" name="article_id" value={art.id} />
+          <button type="submit" class="cyber-btn success" style="width: 100%; padding: 0.6rem; font-size: 0.75rem; font-weight: bold; text-transform: uppercase; border: 1px solid var(--neon-green); background: rgba(57, 255, 20, 0.06); color: #fff; cursor: pointer; border-radius: 6px; box-shadow: 0 0 10px rgba(57, 255, 20, 0.1);">
+            ✓ Aprobar y Publicar
+          </button>
+        </form>
+
+        <form method="POST" style="margin: 0; flex: 1; min-width: 140px;">
+          <input type="hidden" name="action" value="reject" />
+          <input type="hidden" name="article_id" value={art.id} />
+          <button type="submit" class="cyber-btn warning" style="width: 100%; padding: 0.6rem; font-size: 0.75rem; font-weight: bold; text-transform: uppercase; border: 1px solid var(--neon-amber); background: rgba(255, 183, 3, 0.06); color: #fff; cursor: pointer; border-radius: 6px; box-shadow: 0 0 10px rgba(255, 183, 3, 0.1);">
+            ✗ Rechazar (Papelera)
+          </button>
+        </form>
+
+        <form method="POST" style="margin: 0; flex: 1; min-width: 140px;" onsubmit="return confirm('¿Seguro que deseas ELIMINAR permanentemente este artículo de la base de datos? Esta acción es irreversible.');">
+          <input type="hidden" name="action" value="delete_article" />
+          <input type="hidden" name="article_id" value={art.id} />
+          <button type="submit" class="cyber-btn danger" style="width: 100%; padding: 0.6rem; font-size: 0.75rem; font-weight: bold; text-transform: uppercase; border: 1px solid var(--neon-rose); background: rgba(220, 39, 67, 0.06); color: #fff; cursor: pointer; border-radius: 6px; box-shadow: 0 0 10px rgba(220, 39, 67, 0.1);">
+            🗑️ Borrar Permanente
+          </button>
+        </form>
+      </div>
+
+      <!-- Formulario de Edición y Aprobación en Bloque -->
+      <details class="accordion-edit" style="border-top: 1px solid var(--border-color); padding-top: 1rem;">
+        <summary style="cursor: pointer; font-size: 0.85rem; font-weight: bold; color: var(--neon-blue); outline: none;">✏️ Editar y Aprobar Borrador</summary>
+        <form method="POST" class="edit-form" style="margin-top: 1rem; display: flex; flex-direction: column; gap: 1rem;">
+          <input type="hidden" name="action" value="edit_article" />
+          <input type="hidden" name="article_id" value={art.id} />
+          
+          <div class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+              <label style="display: block; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.4rem;">Título del Análisis:</label>
+              <input type="text" name="title" value={art.title} required class="edit-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem;" />
+            </div>
+            <div class="form-group">
+              <label style="display: block; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.4rem;">Veredicto Oficial:</label>
+              <select name="verdict" class="edit-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem;">
+                <option value="Falso" selected={art.verdict === 'Falso'}>Falso</option>
+                <option value="Verdadero" selected={art.verdict === 'Verdadero'}>Verdadero</option>
+                <option value="Engañoso" selected={art.verdict === 'Engañoso'}>Engañoso</option>
+                <option value="Falta contexto" selected={art.verdict === 'Falta contexto'}>Falta contexto</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label style="display: block; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.4rem;">Subtítulo / Copete didáctico:</label>
+            <input type="text" name="subtitle" value={art.subtitle} required class="edit-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem;" />
+          </div>
+
+          <div class="form-group">
+            <label style="display: block; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.4rem;">Explicación Detallada (Leyes/Datos oficiales):</label>
+            <textarea name="explanation" rows="5" required class="edit-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem; resize: vertical;">{art.explanation}</textarea>
+          </div>
+
+          <div class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+              <label style="display: block; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.4rem;">¿Qué es Verdad? (Cifras):</label>
+              <textarea name="what_is_true" rows="2" class="edit-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem; resize: vertical;">{art.what_is_true}</textarea>
+            </div>
+            <div class="form-group">
+              <label style="display: block; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.4rem;">¿Qué es Bulo / Mentira?:</label>
+              <textarea name="what_is_false" rows="2" class="edit-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem; resize: vertical;">{art.what_is_false}</textarea>
+            </div>
+          </div>
+
+          <div class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+              <label style="display: block; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.4rem;">Termómetro de Desinformación (0-100):</label>
+              <input type="number" name="matiza_score" min="0" max="100" value={art.matiza_score || 50} required class="edit-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem;" />
+            </div>
+            <div class="form-group">
+              <label style="display: block; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.4rem;">Etiqueta Emoji:</label>
+              <select name="emoji_tag" class="edit-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem;">
+                <option value="🔥 Caliente" selected={art.emoji_tag === '🔥 Caliente'}>🔥 Caliente</option>
+                <option value="🧊 Falta contexto" selected={art.emoji_tag === '🧊 Falta contexto'}>🧊 Falta contexto</option>
+                <option value="🧪 Necesita pruebas" selected={art.emoji_tag === '🧪 Necesita pruebas'}>🧪 Necesita pruebas</option>
+                <option value=" Marco legal" selected={art.emoji_tag === ' Marco legal'}> Marco legal</option>
+                <option value="💸 Promoción oculta" selected={art.emoji_tag === '💸 Promoción oculta'}>💸 Promoción oculta</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label style="display: block; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.4rem;">Técnica de Manipulación / Truco Usado:</label>
+            <select name="trick_used" class="edit-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem;">
+              <option value="cherry-picking" selected={art.trick_used === 'cherry-picking'}>Cherry-picking (Sesgo de datos)</option>
+              <option value="falso dilema" selected={art.trick_used === 'falso dilema'}>Falso dilema (Blanco o negro)</option>
+              <option value="culpa colectiva" selected={art.trick_used === 'culpa colectiva'}>Culpa colectiva (Generalizaciones)</option>
+              <option value="dato sin base" selected={art.trick_used === 'dato sin base'}>Dato sin base (Estadística alarmista)</option>
+              <option value="vídeo recortado" selected={art.trick_used === 'vídeo recortado'}>Vídeo recortado o antiguo</option>
+              <option value="autoridad falsa" selected={art.trick_used === 'autoridad falsa'}>Autoridad falsa o inventada</option>
+              <option value="miedo/urgencia" selected={art.trick_used === 'miedo/urgencia'}>Miedo / Apelación al pánico</option>
+              <option value="promoción encubierta" selected={art.trick_used === 'promoción encubierta'}>Promoción o afiliado encubierto</option>
+            </select>
+          </div>
+
+          <div class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+              <label style="display: block; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.4rem;">Expediente Asociado:</label>
+              <select name="topic_id" class="edit-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem;">
+                <option value="">— Ninguno (Noticia Suelta) —</option>
+                {activeTopics.map(t => (
+                  <option value={t.id} selected={art.topic_id === t.id}>[{t.category}] {t.title}</option>
+                ))}
+              </select>
+            </div>
+            <div class="form-group">
+              <label style="display: block; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.4rem;">Estado de publicación:</label>
+              <select name="status" class="edit-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem;">
+                <option value="publicado" selected>Publicar en Vivo</option>
+                <option value="borrador">Mantener Borrador</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label style="display: block; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.4rem;">Etiquetas / Tags (separadas por comas):</label>
+            <input type="text" name="tags" value={art.tags ? art.tags.join(', ') : ''} placeholder="Ej: vivienda, jóvenes, alquiler, bulo" class="edit-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem;" />
+          </div>
+
+          <div class="form-actions" style="margin-top: 0.5rem;">
+            <button type="submit" class="cyber-btn accent" style="width: 100%; padding: 0.7rem; font-weight: bold; text-transform: uppercase;"> Guardar y Publicar en Web</button>
+          </div>
+        </form>
+      </details>
+    </div>
+  ))}
+  {draftsWithDetails.length === 0 && (
+    <p class="empty-state" style="color: var(--text-muted); font-size: 0.9rem; font-style: italic;">No hay borradores pendientes en la cola.</p>
+  )}
+</div>

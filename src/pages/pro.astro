@@ -1,0 +1,320 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { getDatabase } from '../lib/db.js';
+
+export const prerender = true;
+
+const db = getDatabase();
+
+// Cargar todos los artículos publicados en la vertical Pro
+const articles = db.prepare(`
+  SELECT a.*, t.title as topic_title, t.slug as topic_slug
+  FROM articles a
+  INNER JOIN topics t ON a.topic_id = t.id
+  WHERE a.status = 'publicado' AND (t.theme_id = 'theme-desinformacion' OR t.category LIKE '%Desinformación%' OR a.category LIKE '%Desinformación%')
+  ORDER BY a.published_at DESC, a.created_at DESC
+`).all() as any[];
+
+db.close();
+
+// Mapa de veredicto a color neón
+const getVerdictClass = (verdict) => {
+  const v = (verdict || '').toLowerCase();
+  if (v.includes('verdadero')) return 'green';
+  if (v.includes('falso')) return 'rose';
+  if (v.includes('engañoso') || v.includes('contexto')) return 'amber';
+  return 'purple';
+};
+
+function getRelativeTime(dateString) {
+  if (!dateString) return 'hace un momento';
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  if (isNaN(diffMs)) return 'hace un momento';
+  const diffMin = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffMin < 1) return 'hace unos segundos';
+  if (diffMin < 60) return `hace ${diffMin} min`;
+  if (diffHours < 24) return `hace ${diffHours} h`;
+  return `hace ${diffDays} días`;
+}
+
+const base = import.meta.env.BASE_URL;
+const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base;
+---
+
+<Layout 
+  title="MATIZA Pro — Herramientas para Investigadores y Prensa" 
+  description="API unificada, monitor de volumen de desinformación, alertas de campañas coordinadas y panel corporativo."
+>
+  <div class="labs-hero" style="position: relative; overflow: hidden; padding: 5rem 1.5rem 4rem 1.5rem; background: radial-gradient(circle at 50% 0%, rgba(212, 175, 55, 0.04) 0%, rgba(7, 9, 19, 0) 70%); border-bottom: 1px solid var(--border-color);">
+    <div class="container" style="max-width: 1000px; margin: 0 auto; text-align: center;">
+      <div class="badge" style="font-family: monospace; font-size: 0.65rem; color: #ffd700; border: 1px solid #ffd700; padding: 0.25rem 0.6rem; border-radius: 4px; display: inline-block; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 0.1em; background: rgba(212, 175, 55, 0.02); box-shadow: 0 0 10px rgba(212, 175, 55, 0.15);">
+        SYSTEM / PRO
+      </div>
+      <h1 style="font-family: var(--font-title); font-size: 2.8rem; font-weight: 900; letter-spacing: -0.04em; color: #ffd700; margin: 0 0 1rem 0; text-transform: uppercase; line-height: 1.1;">
+        MATIZA PRO
+      </h1>
+      <p style="font-size: 1.05rem; color: var(--text-muted); line-height: 1.6; max-width: 650px; margin: 0 auto;">
+        Herramientas analíticas y acceso a datos de nivel institucional para periodistas, investigadores de desinformación en redes sociales, universidades y redacciones de prensa.
+      </p>
+    </div>
+  </div>
+
+  <!-- SECCIÓN INTERACTIVA: CONSOLA DE LA API Y MONITOREO -->
+  <div class="container" style="max-width: 1000px; margin: 0 auto; padding: 3rem 1.5rem;">
+    
+    <div style="text-align: center; margin-bottom: 2.5rem;">
+      <span style="font-family: monospace; font-size: 0.6rem; color: #ffd700; letter-spacing: 0.05em; text-transform: uppercase;">Consola de API e Integración</span>
+      <h2 style="font-family: var(--font-title); color: #fff; font-size: 1.6rem; font-weight: 850; text-transform: uppercase; margin: 0.25rem 0 0.5rem 0; letter-spacing: -0.02em;">
+        Endpoints de Verificación Masiva
+      </h2>
+      <p style="font-size: 0.85rem; color: var(--text-muted); max-width: 500px; margin: 0 auto;">
+        Explora la documentación del API de MATIZA Pro para integraciones institucionales.
+      </p>
+    </div>
+
+    <!-- Selectores del API -->
+    <div style="display: flex; justify-content: center; gap: 0.75rem; margin-bottom: 2rem; flex-wrap: wrap;">
+      <button class="api-btn active" data-api="check" style="font-family: var(--font-title); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; padding: 0.6rem 1.2rem; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; color: #fff; cursor: pointer; transition: all 0.2s;">
+        [ POST /api/verify ]
+      </button>
+      <button class="api-btn" data-api="stats" style="font-family: var(--font-title); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; padding: 0.6rem 1.2rem; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-muted); cursor: pointer; transition: all 0.2s;">
+        [ GET /api/scrapers/stats ]
+      </button>
+      <button class="api-btn" data-api="alerts" style="font-family: var(--font-title); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; padding: 0.6rem 1.2rem; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-muted); cursor: pointer; transition: all 0.2s;">
+        [ GET /api/campaigns ]
+      </button>
+    </div>
+
+    <!-- Panel del API -->
+    <div style="background: rgba(18, 22, 41, 0.4); border: 1px solid var(--border-color); padding: 2rem; border-radius: 16px; backdrop-filter: blur(20px);">
+      <div id="api-content-box">
+        <!-- Contenido dinámico inyectado por JS -->
+      </div>
+    </div>
+
+  </div>
+
+  <div class="container" style="max-width: 680px; margin: 0 auto; padding: 1rem 1.5rem 6rem 1.5rem;">
+    
+    <!-- Listado de Artículos (Dinámico) -->
+    <div style="display: flex; flex-direction: column; gap: 1.5rem; margin-bottom: 4rem;">
+      <h2 style="font-family: var(--font-title); color: #fff; font-size: 1.2rem; font-weight: 850; text-transform: uppercase; letter-spacing: -0.01em; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+        Análisis de Campañas Coordinadas
+      </h2>
+      
+      {articles.map(art => (
+        <article class={`cyber-card ${getVerdictClass(art.verdict)}`} style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; transition: transform 0.2s ease, box-shadow 0.2s ease;">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+              <span class={`verdict-badge ${art.verdict.toLowerCase().replace(' ', '-')}`} style="font-size: 0.65rem; padding: 0.15rem 0.4rem;">
+                {art.verdict}
+              </span>
+              <a 
+                href={`${cleanBase}/tema/${art.topic_slug || 'general'}`}
+                style="font-size: 0.7rem; font-weight: bold; color: var(--neon-blue); text-decoration: none; text-transform: uppercase;"
+              >
+                #{art.topic_title || 'General'}
+              </a>
+            </div>
+            <time style="font-size: 0.75rem; color: var(--text-muted);" datetime={art.published_at || art.created_at}>
+              Incorporado {getRelativeTime(art.published_at)}
+            </time>
+          </div>
+
+          <div>
+            <h2 style="font-size: 1.35rem; margin-top: 0; margin-bottom: 0.35rem; font-weight: 750; font-family: var(--font-title); line-height: 1.25;">
+              <a href={`${cleanBase}/noticia/${art.slug}`} style="color: var(--text-main); text-decoration: none; transition: color 0.15s;">
+                {art.title}
+              </a>
+            </h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; line-height: 1.4; margin: 0 0 0.75rem 0;">
+              {art.subtitle}
+            </p>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 0.75rem; font-size: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+            <span>Expediente: <a href={`${cleanBase}/tema/${art.topic_slug}`} style="color: var(--neon-purple); text-decoration: none; font-weight: bold;">{art.topic_title}</a></span>
+            <a href={`${cleanBase}/noticia/${art.slug}`} style="color: var(--neon-blue); text-decoration: none; font-weight: 800; display: inline-flex; align-items: center; gap: 0.25rem;">
+              Auditar hechos e informe &rarr;
+            </a>
+          </div>
+        </article>
+      ))}
+
+      {articles.length === 0 && (
+        <div class="cyber-card" style="padding: 2.5rem; text-align: center; border-color: rgba(255,255,255,0.05); background: rgba(255,255,255,0.005); border-radius: 12px;">
+          <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0; line-height: 1.5;">
+            No hay análisis de desinformación pro activos en este momento.
+          </p>
+        </div>
+      )}
+    </div>
+
+    <!-- Lista de Espera -->
+    <div style="background: linear-gradient(135deg, rgba(7, 9, 19, 0.8), rgba(212, 175, 55, 0.01)); border: 1px solid var(--border-color); padding: 2.5rem; border-radius: 16px; border-top-color: rgba(212, 175, 55, 0.3);">
+      <h3 style="font-family: var(--font-title); color: #fff; font-size: 1.2rem; font-weight: 850; text-transform: uppercase; margin: 0 0 0.75rem 0; letter-spacing: -0.01em;">
+        Solicitud de Acceso Corporativo
+      </h3>
+      <p style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1.5rem;">
+        Estamos desplegando claves API de prueba gratuitas para redactores jefe, agencias de verificación e investigadores académicos acreditados. Solicita tu acceso:
+      </p>
+
+      <form style="display: flex; flex-direction: column; gap: 1.25rem;">
+        <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+          <label style="font-size: 0.7rem; font-family: monospace; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Nombre de tu Organización o Medio</label>
+          <input 
+            type="text" 
+            placeholder="Ej. Diario Digital, Universidad Pública, o Medio de Prensa..." 
+            style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); padding: 0.85rem 1rem; border-radius: 8px; color: #fff; font-size: 0.85rem; outline: none; width: 100%;"
+            required
+          />
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+          <label style="font-size: 0.7rem; font-family: monospace; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Tu Correo Profesional</label>
+          <input 
+            type="email" 
+            placeholder="Ej. redaccion@tu-medio.com" 
+            style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); padding: 0.85rem 1rem; border-radius: 8px; color: #fff; font-size: 0.85rem; outline: none; width: 100%;"
+            required
+          />
+        </div>
+        <button 
+          type="submit" 
+          style="background: #ffd700; color: #070913; border: none; font-weight: 900; font-family: var(--font-title); font-size: 0.75rem; text-transform: uppercase; padding: 1rem; border-radius: 8px; cursor: pointer; letter-spacing: 0.05em; transition: all 0.2s;"
+        >
+          Solicitar Clave API de Pruebas
+        </button>
+      </form>
+    </div>
+
+  </div>
+</Layout>
+
+<script is:inline>
+  const apis = {
+    check: {
+      method: "POST",
+      endpoint: "/api/verify",
+      description: "Verifica una afirmación o texto en lote de forma programática. El motor de IA buscará evidencias oficiales e indicará un veredicto estructurado.",
+      request: `{
+  "text": "Afirmación o reclamo a auditar...",
+  "priority": "alta",
+  "metadata": {
+    "scraped_source": "Redes sociales",
+    "origin_url": "https://x.com/post/123"
+  }
+}`,
+      response: `{
+  "success": true,
+  "job_id": "job_1784311894",
+  "status": "procesando",
+  "estimated_time_seconds": 30
+}`
+    },
+    stats: {
+      method: "GET",
+      endpoint: "/api/scrapers/stats",
+      description: "Recupera estadísticas en tiempo real sobre el volumen de capturas de claims por plataforma, tasa de acierto y volumen de almacenamiento del PC local.",
+      request: `No requiere cuerpo en la petición (autenticación vía clave API en cabecera).`,
+      response: `{
+  "platform_scraped_total": 24903,
+  "db_size_bytes": 10592811,
+  "last_hourly_sync": "2026-07-17T20:10:00Z",
+  "verdict_distribution": {
+    "falso": 45,
+    "engañoso": 22,
+    "falta_contexto": 18,
+    "verdadero": 15
+  }
+}`
+    },
+    alerts: {
+      method: "GET",
+      endpoint: "/api/campaigns",
+      description: "Lista las narrativas activas detectadas como campañas coordinadas por bots o propagación inusual de enlaces de desinformación.",
+      request: `No requiere cuerpo de solicitud. Parámetros opcionales: limit (número de alertas).`,
+      response: `{
+  "active_campaigns": [
+    {
+      "campaign_id": "camp_mig_12",
+      "detected_claim": "Paga de 4.000€ a inmigrantes",
+      "virality_growth_rate": "150%",
+      "bot_activity_index": 8.7,
+      "scraped_urls_count": 42
+    }
+  ]
+}`
+    }
+  };
+
+  const apiButtons = document.querySelectorAll('.api-btn');
+  const apiContentBox = document.getElementById('api-content-box');
+
+  function renderApi(key) {
+    const a = apis[key];
+    apiContentBox.innerHTML = `
+      <div style="display: flex; flex-direction: column; gap: 1.25rem; animation: slideIn 0.2s ease-out forwards;">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 0.75rem;">
+          <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <span style="font-family: monospace; font-size: 0.75rem; font-weight: bold; background: #ffd700; color: #070913; padding: 0.15rem 0.4rem; border-radius: 4px;">${a.method}</span>
+            <span style="font-family: monospace; font-size: 0.95rem; color: #fff; font-weight: bold;">${a.endpoint}</span>
+          </div>
+          <span style="font-family: monospace; font-size: 0.65rem; color: var(--text-muted);">API v1.0</span>
+        </div>
+        
+        <div>
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0; line-height: 1.5;">${a.description}</p>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;" class="api-code-grid">
+          <div>
+            <span style="font-family: monospace; font-size: 0.6rem; color: #ffd700; text-transform: uppercase; display: block; margin-bottom: 0.35rem;">[ CUERPO DE LA PETICIÓN ]</span>
+            <pre style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); padding: 0.75rem; border-radius: 8px; color: #a5d6ff; font-family: monospace; font-size: 0.72rem; overflow-x: auto; margin: 0;"><code>${a.request}</code></pre>
+          </div>
+          <div>
+            <span style="font-family: monospace; font-size: 0.6rem; color: var(--neon-blue); text-transform: uppercase; display: block; margin-bottom: 0.35rem;">[ RESPUESTA DEL SERVIDOR ]</span>
+            <pre style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08); padding: 0.75rem; border-radius: 8px; color: #85e89d; font-family: monospace; font-size: 0.72rem; overflow-x: auto; margin: 0;"><code>${a.response}</code></pre>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  apiButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      apiButtons.forEach(b => {
+        b.style.color = 'var(--text-muted)';
+        b.classList.remove('active');
+      });
+      btn.style.color = '#ffd700';
+      btn.classList.add('active');
+      
+      const key = btn.getAttribute('data-api');
+      renderApi(key);
+    });
+  });
+
+  // Render inicial
+  renderApi('check');
+</script>
+
+<style is:global>
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @media (max-width: 767px) {
+    .api-code-grid {
+      grid-template-columns: 1fr !important;
+    }
+  }
+  article:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(212, 175, 55, 0.05);
+  }
+</style>

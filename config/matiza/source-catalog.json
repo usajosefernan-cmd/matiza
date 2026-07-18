@@ -1,0 +1,39 @@
+{
+  "trusted_authorities": [
+    {
+      "id": "boe",
+      "name": "Boletín Oficial del Estado (BOE)",
+      "url": "https://www.boe.es",
+      "authority_level": "Máxima",
+      "scope": "Legislación, decretos, reglamentos y normativas estatales"
+    },
+    {
+      "id": "ine",
+      "name": "Instituto Nacional de Estadística (INE)",
+      "url": "https://www.ine.es",
+      "authority_level": "Máxima",
+      "scope": "Estadísticas oficiales, demografía, índices de precios (IPC) y Encuesta de Población Activa (EPA)"
+    },
+    {
+      "id": "sepe",
+      "name": "Servicio Público de Empleo Estatal (SEPE)",
+      "url": "https://www.sepe.gob.es",
+      "authority_level": "Máxima",
+      "scope": "Datos oficiales de desempleo, prestaciones, subsidios y contratos laborales"
+    },
+    {
+      "id": "aeat",
+      "name": "Agencia Estatal de Administración Tributaria (AEAT)",
+      "url": "https://www.agenciatributaria.es",
+      "authority_level": "Máxima",
+      "scope": "Presión fiscal, tramos del IRPF, IVA, Impuesto sobre Sociedades y recaudación pública"
+    },
+    {
+      "id": "seg-social",
+      "name": "Seguridad Social y RETA",
+      "url": "https://www.seg-social.es",
+      "authority_level": "Máxima",
+      "scope": "Cotizaciones sociales, bases de autónomos, pensiones y afiliaciones del mercado de trabajo"
+    }
+  ]
+}

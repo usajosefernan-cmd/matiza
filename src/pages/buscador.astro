@@ -1,0 +1,455 @@
+---
+export const prerender = true;
+import Layout from '../layouts/Layout.astro';
+import { getDatabase } from '../lib/db.js';
+import path from 'node:path';
+import fs from 'node:fs';
+import { analyzeUrl } from '../../scripts/check-url.js';
+import { execSync } from 'node:child_process';
+
+// Cargar variables de entorno del archivo .env
+function loadEnv() {
+  const envPath = path.resolve('.env');
+  if (fs.existsSync(envPath)) {
+    const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
+    lines.forEach(line => {
+      const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
+      if (match) {
+        const key = match[1];
+        let value = match[2] || '';
+        if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
+        else if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1);
+        process.env[key] = value.trim();
+      }
+    });
+  }
+}
+loadEnv();
+
+const query = Astro.url.searchParams.get('q') || '';
+const queryNormalized = query.trim().toLowerCase();
+const verify = Astro.url.searchParams.get('verify') === 'true';
+let results = [] as any[];
+let submitted = false;
+let verificationLog = [] as string[];
+let liveResult = null as any;
+let scrapedData = null as any;
+
+// Manejo del envío de nuevo reporte al radar (POST)
+if (Astro.request.method === 'POST') {
+  try {
+    const data = await Astro.request.formData();
+    const claim = data.get('claim')?.toString() || '';
+    const platform = data.get('platform')?.toString() || 'Web User';
+    const url = data.get('url')?.toString() || '';
+
+    const claimClean = claim.trim();
+    const platformClean = platform.trim() || 'Web User';
+    const urlClean = url.trim();
+
+    if (claimClean.length > 5) {
+      const db = getDatabase();
+      const id = `radar-user-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+      db.prepare(`
+        INSERT INTO scraped_items (id, platform, url, text, author_public_name, metrics_json, detected_claim, suggested_topic, virality_score, risk_score, status, created_at)
+        VALUES (?, ?, ?, ?, 'Usuario Web', '{}', ?, 'General', 5.0, 5.0, 'pendiente', datetime('now'))
+      `).run(id, platformClean, urlClean, claimClean, claimClean);
+
+      db.close();
+      submitted = true;
+    }
+  } catch (err) {
+    console.error('Error insertando reporte de usuario:', err);
+  }
+}
+
+// Búsqueda en la base de datos (si hay consulta q)
+if (queryNormalized.length > 0) {
+  const db = getDatabase();
+
+  results = db.prepare(`
+    SELECT a.*, t.title as topic_title, t.slug as topic_slug
+    FROM articles a
+    LEFT JOIN topics t ON a.topic_id = t.id
+    WHERE a.status = 'publicado' AND (
+      LOWER(a.title) LIKE ? OR
+      LOWER(a.subtitle) LIKE ? OR
+      LOWER(a.claim) LIKE ? OR
+      LOWER(a.explanation) LIKE ?
+    )
+    ORDER BY a.published_at DESC
+  `).all(`%${queryNormalized}%`, `%${queryNormalized}%`, `%${queryNormalized}%`, `%${queryNormalized}%`) as any[];
+
+  db.close();
+}
+
+// LÓGICA DE VERIFICACIÓN EN VIVO POR IA & SCRAPER
+if (verify && queryNormalized.length > 0) {
+  const log = (msg: string) => {
+    const time = new Date().toLocaleTimeString('es-ES');
+    verificationLog.push(`[${time}] ${msg}`);
+  };
+
+  log(`Iniciando Verificador Inteligente para: "${query}"`);
+
+  try {
+    const isUrl = query.startsWith('http://') || query.startsWith('https://') || query.includes('.com') || query.includes('.es') || query.includes('t.me/');
+    scrapedData = null;
+
+    if (isUrl) {
+      log(`Detectada URL. Iniciando raspador en caliente de la plataforma...`);
+      scrapedData = await analyzeUrl(query);
+      if (scrapedData.isAccessible) {
+        log(`Raspado exitoso. Plataforma: ${scrapedData.platform}. Título extraído: "${scrapedData.title.substring(0, 50)}..."`);
+      } else {
+        log(` Advertencia de acceso al raspador: ${scrapedData.error || 'La plataforma bloquea acceso directo. Usando fallback.'}`);
+      }
+    } else {
+      log(`Detectado texto plano. Procediendo a realizar búsqueda semántica e investigación directa por IA...`);
+    }
+
+    log(`Conectando con el verificador real del motor (con fallback multi-provider)...`);
+    const { verifyClaim } = await import('../../scripts/matiza-engine/07-verifier.js' as any);
+
+    const sources = scrapedData ? [{
+      title: scrapedData.title || `Contenido de ${scrapedData.platform || 'URL'}`,
+      url: query,
+      source_type: 'web_scrape',
+      authority_level: 'Media',
+      quote_or_summary: scrapedData.title || ''
+    }] : [];
+
+    const verifyResult = await verifyClaim(query, sources);
+
+    if (!verifyResult || !verifyResult.verdict) {
+      throw new Error('El verificador no pudo obtener un veredicto válido.');
+    }
+
+    const trimmedQuery = query.trim();
+    const title = (trimmedQuery.startsWith('¿') && trimmedQuery.endsWith('?'))
+      ? trimmedQuery
+      : `¿Es cierto lo que se afirma sobre "${trimmedQuery.replace(/\.$/, '')}"?`;
+
+    const explanation = verifyResult.verdict_reasoning || '';
+    const summary = verifyResult.summary || `${verifyResult.verdict}: ${verifyResult.what_is_true || ''} ${verifyResult.what_is_false || ''}`.trim().substring(0, 200) + '...';
+    const liveSources = scrapedData ? [{ title: scrapedData.title || `Contenido de ${scrapedData.platform || 'URL'}`, url: query }] : [];
+
+    liveResult = {
+      title,
+      verdict: verifyResult.verdict,
+      confidence: verifyResult.confidence,
+      summary,
+      explanation,
+      what_is_true: verifyResult.what_is_true,
+      what_is_false: verifyResult.what_is_false,
+      sources: liveSources
+    };
+
+    log(`Auditoría de IA completada. Veredicto determinado: "${liveResult.verdict}".`);
+    log(`Guardando resultados en los registros del portal...`);
+
+    // Guardar en base de datos
+    const db = getDatabase();
+    const verifId = `verif-${Date.now()}`;
+
+    db.prepare(`
+      INSERT INTO verification_logs (id, query_text, ip_address, status, verdict, scraped_metadata_json, execution_log, created_at)
+      VALUES (?, ?, 'Local User', ?, ?, ?, ?, datetime('now'))
+    `).run(
+      verifId,
+      query,
+      `live_${liveResult.verdict.toLowerCase().replace(' ', '_')}`,
+      liveResult.verdict,
+      JSON.stringify(scrapedData || {}),
+      verificationLog.join('\n')
+    );
+
+    db.close();
+    log(`Guardado completado exitosamente. ID de auditoría: ${verifId}`);
+
+  } catch (err: any) {
+    log(` Error crítico en el motor de verificación: ${err.message}`);
+
+    // Intentar registrar el fallo en BD para auditoría
+    try {
+      const db = getDatabase();
+      const verifId = `verif-err-${Date.now()}`;
+      db.prepare(`
+        INSERT INTO verification_logs (id, query_text, ip_address, status, verdict, scraped_metadata_json, execution_log, created_at)
+        VALUES (?, ?, 'Local User', 'error', 'Error', '{}', ?, datetime('now'))
+      `).run(verifId, query, verificationLog.join('\n'));
+      db.close();
+    } catch(dbErr) {}
+  }
+}
+
+// Mapa de veredicto a color neón
+const getVerdictClass = (verdict) => {
+  const v = (verdict || '').toLowerCase();
+  if (v.includes('verdadero')) return 'green';
+  if (v.includes('falso')) return 'rose';
+  if (v.includes('engañoso') || v.includes('contexto')) return 'amber';
+  return 'purple';
+};
+---
+
+<Layout title="Buscador de Bulos y Desmentidos">
+  <div class="container" style="max-width: 800px;">
+
+    <div style="margin-bottom: 2.5rem; text-align: center;">
+      <h1 style="font-size: 2.5rem; margin-bottom: 0.5rem;">
+         Buscador de <span class="text-gradient-blue">Claims</span>
+      </h1>
+      <p style="color: var(--text-muted);">
+        Introduce la frase sospechosa, post viral o tema del que dudas y buscaremos en nuestro archivo de auditorías con fuentes.
+      </p>
+    </div>
+
+    <!-- Caja de Búsqueda -->
+    <div class="cyber-card blue" style="margin-bottom: 3rem; background: var(--bg-card);">
+      <form action="/buscador" method="GET" style="display: flex; gap: 0.75rem;">
+        <input
+          type="text"
+          name="q"
+          value={query}
+          placeholder="Ej: ¿Franco creó la seguridad social? o ¿Qué es la okupación?"
+          required
+          style="flex-grow: 1; padding: 0.75rem; background: var(--bg-dark); border: 2px solid var(--border-color); color: var(--text-main); font-family: var(--font-body); font-size: 1rem;"
+        />
+        <button type="submit" class="cyber-btn accent" style="box-shadow: 2px 2px 0px 0px var(--text-main);">
+          Buscar
+        </button>
+      </form>
+    </div>
+
+    {query.trim().length > 0 ? (
+      <section>
+        <h2 style="font-size: 1.5rem; border-bottom: 2px solid var(--border-color); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">
+          Resultados de búsqueda para "{query}" ({results.length})
+        </h2>
+
+        <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+          {results.map(art => (
+            <div class={`cyber-card ${getVerdictClass(art.verdict)}`} style="padding: 1.5rem; display: flex; flex-direction: column; gap: 0.75rem;">
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <span class={`verdict-badge ${art.verdict.toLowerCase().replace(' ', '-')}`}>
+                  {art.verdict}
+                </span>
+                <span style="color: var(--text-muted); font-size: 0.8rem;">
+                  Tema: <a href={`/tema/${art.topic_slug}`} style="color: var(--neon-blue); text-decoration: underline;">{art.topic_title}</a>
+                </span>
+              </div>
+              <h3 style="font-size: 1.25rem;">
+                <a href={`/noticia/${art.slug}`} class="article-link">{art.title}</a>
+              </h3>
+              <p style="color: var(--text-muted); font-size: 0.9rem;">
+                {art.subtitle}
+              </p>
+              <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border-color); padding-top: 0.5rem; font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">
+                <span>Vía: {art.origin_platform}</span>
+                <a href={`/noticia/${art.slug}`} class="read-more-link" style="color: var(--neon-blue); font-weight: bold;">Ver auditoría →</a>
+              </div>
+            </div>
+          ))}
+
+          {results.length === 0 && (
+            <div>
+              {verify ? (
+                <div style="display: flex; flex-direction: column; gap: 2rem;">
+                  <!-- Terminal de Logs del Servidor -->
+                  <div class="cyber-card purple" style="padding: 1.25rem; background: #070913; border-color: var(--neon-purple);">
+                    <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(157, 78, 221, 0.2); padding-bottom: 0.5rem; margin-bottom: 1rem;">
+                      <span style="font-family: var(--font-title); font-size: 0.75rem; text-transform: uppercase; color: var(--neon-purple); font-weight: bold; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.5rem;">
+                        📟 Consola del Servidor (Logs de Verificación en Vivo)
+                      </span>
+                      <span class="pulse-dot" style="width: 8px; height: 8px; border-radius: 50%; background: var(--neon-purple); box-shadow: 0 0 8px var(--neon-purple);"></span>
+                    </div>
+                    <div class="terminal-body" style="font-family: monospace; font-size: 0.85rem; color: #a5b4fc; line-height: 1.5; background: #020308; padding: 1rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); max-height: 200px; overflow-y: auto;">
+                      {verificationLog.map((line, idx) => (
+                        <div class="terminal-line" style={`animation: fadeIn 0.2s ease-out forwards; animation-delay: ${idx * 0.2}s; opacity: 0;`}>
+                          {line}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <!-- Reporte de la Verificación en Vivo -->
+                  {liveResult ? (
+                    <div class="cyber-card" style={`padding: 2rem; border-color: var(--neon-${getVerdictClass(liveResult.verdict)});`}>
+                      <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 1rem; margin-bottom: 1.5rem;">
+                        <span class={`verdict-badge ${liveResult.verdict.toLowerCase().replace(' ', '-')}`}>
+                          {liveResult.verdict}
+                        </span>
+                        <span style="font-size: 0.8rem; color: var(--text-muted);">
+                          Confianza: <strong>{liveResult.confidence}</strong>
+                        </span>
+                      </div>
+
+                      <h2 style="font-size: 1.6rem; line-height: 1.25; margin-bottom: 1rem; color: var(--text-main); font-weight: 850;">
+                        {liveResult.title}
+                      </h2>
+                      <p style="font-size: 1.05rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1.5rem; font-style: italic;">
+                        "{liveResult.summary}"
+                      </p>
+
+                      {scrapedData && scrapedData.views !== undefined && scrapedData.views > 0 && (
+                        <div style="margin-bottom: 1.25rem; font-size: 0.9rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.5rem; background: rgba(0, 240, 255, 0.05); border: 1px solid rgba(0, 240, 255, 0.15); padding: 0.5rem 0.75rem; border-radius: 6px;">
+                          <span> Alcance de la Plataforma:</span>
+                          <strong style="color: var(--neon-blue);">{scrapedData.views.toLocaleString('es-ES')} visualizaciones</strong>
+                        </div>
+                      )}
+
+                      {scrapedData && scrapedData.imageUrl && (
+                        <div style="margin-bottom: 1.5rem; text-align: center; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); background: rgba(0,0,0,0.25); max-height: 300px; display: flex; justify-content: center; align-items: center;">
+                          <img src={scrapedData.imageUrl} alt="Evidencia multimedia detectada" style="max-width: 100%; max-height: 300px; object-fit: contain;" />
+                        </div>
+                      )}
+
+                      <div style="background: rgba(10, 15, 30, 0.4); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem;">
+                        <h3 style="font-size: 0.95rem; margin-bottom: 0.5rem; text-transform: uppercase; color: var(--text-main); font-weight: bold; letter-spacing: 0.05em;">Análisis Técnico de la IA</h3>
+                        <p style="font-size: 0.9rem; color: var(--text-muted); line-height: 1.6; white-space: pre-line; margin: 0;">
+                          {liveResult.explanation}
+                        </p>
+                      </div>
+
+                      <div class="form-grid" style="grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
+                        <div style="border-left: 3px solid var(--neon-green); padding-left: 0.75rem;">
+                          <strong style="color: var(--neon-green); display: block; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">¿Qué es verdad?</strong>
+                          <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.4; margin: 0;">{liveResult.what_is_true}</p>
+                        </div>
+                        <div style="border-left: 3px solid var(--neon-rose); padding-left: 0.75rem;">
+                          <strong style="color: var(--neon-rose); display: block; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">¿Qué es mentira?</strong>
+                          <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.4; margin: 0;">{liveResult.what_is_false}</p>
+                        </div>
+                      </div>
+
+                      {liveResult.sources && liveResult.sources.length > 0 && (
+                        <div style="border-top: 1px solid var(--border-color); padding-top: 1.25rem;">
+                          <h4 style="font-size: 0.8rem; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.75rem; font-weight: bold; letter-spacing: 0.05em;">Fuentes oficiales a consultar:</h4>
+                          <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                            {liveResult.sources.map(src => (
+                              <a href={src.url} target="_blank" rel="noopener noreferrer" style="color: var(--neon-blue); text-decoration: none; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.25rem;">
+                                🔗 {src.title} &rarr;
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div class="cyber-card rose" style="padding: 2rem; text-align: center; border-color: var(--neon-rose);">
+                      <span style="font-size: 2.5rem;"></span>
+                      <h3 style="color: var(--neon-rose); margin-top: 0.75rem;">Fallo en la Verificación Instantánea</h3>
+                      <p style="color: var(--text-muted); font-size: 0.9rem; max-width: 500px; margin: 0.5rem auto 0 auto;">
+                        No se pudo realizar el desmentido automatizado. Asegúrate de que la clave API de Gemini está configurada correctamente en el archivo de configuración (.env).
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div class="cyber-card rose" style="padding: 2.25rem; background: rgba(255, 0, 127, 0.02); text-align: center; display: flex; flex-direction: column; gap: 1.25rem; align-items: center;">
+                  <span style="font-size: 2.5rem;"></span>
+                  <h3 style="color: var(--neon-rose); font-family: var(--font-title); font-size: 1.4rem; font-weight: 850;">Bulo no Registrado</h3>
+                  <p style="color: var(--text-muted); max-width: 520px; font-size: 0.95rem; line-height: 1.5; margin: 0;">
+                    No disponemos de ningún desmentido específico para esa afirmación en nuestra base de datos local de expedientes y artículos ya redactados.
+                  </p>
+
+                  <div style="display: flex; gap: 1rem; width: 100%; max-width: 520px; justify-content: center; margin-top: 0.5rem;">
+                    <a href={`/buscador?q=${encodeURIComponent(query)}&verify=true`} class="cyber-btn accent" style="flex-grow: 1; text-align: center; text-decoration: none; box-shadow: 2px 2px 0px 0px var(--text-main); font-weight: 800;">
+                       Iniciar Verificación por IA y Scraper (En Vivo)
+                    </a>
+                  </div>
+
+                  {submitted ? (
+                    <div style="background: rgba(57, 255, 20, 0.1); border: 1px solid var(--neon-green); color: var(--neon-green); padding: 1rem; width: 100%; max-width: 520px; font-weight: bold; margin-top: 1rem; border-radius: 6px;">
+                      ✓ ¡Recibido! El claim se ha insertado en la cola del radar. Nuestros analistas e IA lo investigarán en breve.
+                    </div>
+                  ) : (
+                    <div style="border-top: 1px solid var(--border-color); padding-top: 1.5rem; width: 100%; margin-top: 1rem; text-align: left;">
+                      <h4 style="color: var(--text-main); font-size: 1.1rem; margin-bottom: 0.75rem; text-align: center; font-family: var(--font-title);">¿Quieres enviarlo al radar para auditarlo manualmente?</h4>
+                      <form method="POST" style="display: flex; flex-direction: column; gap: 1rem; max-width: 520px; margin: 0 auto;">
+                        <input type="hidden" name="claim" value={query} />
+
+                        <div>
+                          <label style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem;">Plataforma donde lo viste:</label>
+                          <select name="platform" style="width: 100%; padding: 0.5rem; background: var(--bg-dark); border: 2px solid var(--border-color); color: var(--text-main); font-family: var(--font-body);">
+                            <option value="WhatsApp">WhatsApp</option>
+                            <option value="X (Twitter)">X (Twitter)</option>
+                            <option value="Instagram">Instagram</option>
+                            <option value="TikTok">TikTok</option>
+                            <option value="Facebook">Facebook</option>
+                            <option value="Otro">Otro</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem;">Enlace original (opcional):</label>
+                          <input type="url" name="url" placeholder="https://..." style="width: 100%; padding: 0.5rem; background: var(--bg-dark); border: 2px solid var(--border-color); color: var(--text-main); font-family: var(--font-body);" />
+                        </div>
+
+                        <button type="submit" class="cyber-btn" style="width: 100%; border-color: var(--neon-purple); color: var(--neon-purple);">
+                          Enviar a Cola de Auditoría
+                        </button>
+                      </form>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </section>
+    ) : (
+      <div style="text-align: center; color: var(--text-muted); padding: 4rem 0;">
+        <p>Escribe tu consulta arriba para iniciar la auditoría de datos.</p>
+      </div>
+    )}
+
+  </div>
+</Layout>
+
+<style>
+  .article-link:hover {
+    color: var(--neon-blue) !important;
+  }
+  .read-more-link:hover {
+    text-decoration: underline !important;
+  }
+
+  /* Animaciones y estilos del Terminal Cyberpunk */
+  .terminal-body {
+    scrollbar-width: thin;
+    scrollbar-color: var(--neon-purple) #020308;
+  }
+  .terminal-line {
+    font-family: monospace;
+    font-size: 0.825rem;
+    margin-bottom: 0.25rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .pulse-dot {
+    animation: pulse 1.5s infinite alternate;
+  }
+  @keyframes pulse {
+    from {
+      transform: scale(1);
+      opacity: 0.6;
+    }
+    to {
+      transform: scale(1.15);
+      opacity: 1;
+    }
+  }
+</style>

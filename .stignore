@@ -1,0 +1,18 @@
+# Excluir bases de datos y archivos de journal/WAL en cualquier nivel
+**/data/
+**/*.db*
+**/*.db-wal
+**/*.db-shm
+**/*.sync-conflict-*
+(?d).syncthing.*
+(?d)~syncthing~*
+(?d)*.tmp
+(?d).syncthing*
+dist/
+dist_temp/
+dist_backup/
+.astro/
+node_modules/
+.venv/
+.pytest_cache/
+**/*.mjs

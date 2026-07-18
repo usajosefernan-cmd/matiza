@@ -1,0 +1,916 @@
+---
+export const prerender = true;
+import { getDatabase } from '../lib/db.js';
+import path from 'node:path';
+import Layout from '../layouts/Layout.astro';
+import { modulesConfig } from '../config/modules.js';
+
+const db = getDatabase();
+
+
+
+// Obtener categorías dinámicas
+const rawCategories = db.prepare("SELECT DISTINCT category FROM topics WHERE status = 'activo'").all() as any[];
+const categories = rawCategories.map(c => {
+  const cat = c.category;
+  const slug = cat.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+  return { name: cat, slug };
+}).filter(c => c.name);
+
+// Obtener todos los temas activos con indicadores dinámicos
+const topics = db.prepare(`
+  SELECT t.*, 
+         (SELECT COUNT(*) FROM articles a WHERE a.topic_id = t.id AND a.status = 'publicado' AND datetime(a.published_at) >= datetime('now', '-1 day')) as has_recent,
+         COALESCE(
+           (SELECT CAST(MIN(98, 30 + (COUNT(*) * 4) + SUM(virality_score)) AS INTEGER) FROM scraped_items WHERE suggested_topic = t.title),
+           ((ABS(LENGTH(t.id)) % 20) + 35)
+         ) as noise_level
+  FROM topics t 
+  WHERE t.status = 'activo' 
+  ORDER BY t.title
+`).all();
+
+// Obtener las piezas publicadas ordenadas por fecha
+const articles = db.prepare(`
+  SELECT a.*, t.title as topic_title, t.slug as topic_slug 
+  FROM articles a
+  LEFT JOIN topics t ON a.topic_id = t.id
+  WHERE a.status = 'publicado'
+  ORDER BY a.published_at DESC
+`).all();
+
+// Obtener últimos items del radar
+const radarItems = db.prepare(`
+  SELECT * FROM scraped_items 
+  WHERE status = 'pendiente' 
+  ORDER BY virality_score DESC
+  LIMIT 6
+`).all();
+
+// Obtener fuentes oficiales
+const officialSourceCount = (() => {
+  try { return db.prepare("SELECT COUNT(*) as c FROM official_sources WHERE status = 'activo'").get().c; } 
+  catch(e) { return 0; }
+})();
+
+db.close();
+
+const base = import.meta.env.BASE_URL;
+const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base;
+
+const featuredArticle = articles.length > 0 ? articles[0] : null;
+const remainingArticles = articles.length > 1 ? articles.slice(1) : [];
+const hasArticles = articles.length > 0;
+
+function getVerdictClass(verdict) {
+  const v = (verdict || '').toLowerCase();
+  if (v.includes('confirmado') || v.includes('respaldado')) return 'green';
+  if (v.includes('falta contexto') || v.includes('versiones contradictorias') || v.includes('no verificable')) return 'amber';
+  if (v.includes('engañoso') || v.includes('sin pruebas') || v.includes('acusación no probada')) return 'rose';
+  return 'purple';
+}
+
+function getVerdictColor(verdict) {
+  const v = (verdict || '').toLowerCase();
+  if (v.includes('confirmado') || v.includes('respaldado')) return 'var(--neon-green)';
+  if (v.includes('falta contexto') || v.includes('versiones contradictorias') || v.includes('no verificable')) return 'var(--neon-amber)';
+  if (v.includes('engañoso') || v.includes('sin pruebas') || v.includes('acusación no probada')) return 'var(--neon-rose)';
+  return 'var(--neon-purple)';
+}
+
+function getCategoryInitials(category) {
+  const c = (category || '').toLowerCase();
+  if (c.includes('inmigr') || c.includes('delin')) return 'MIG';
+  if (c.includes('emple') || c.includes('paro')) return 'EMP';
+  if (c.includes('vivien') || c.includes('okup') || c.includes('vida imposible')) return 'VIV';
+  if (c.includes('infla') || c.includes('ipc') || c.includes('vida')) return 'IPC';
+  if (c.includes('auto') || c.includes('fisc') || c.includes('haci')) return 'AUT';
+  if (c.includes('historia') || c.includes('memo')) return 'HIS';
+  if (c.includes('corrupc') || c.includes('transpa')) return 'COR';
+  if (c.includes('sanid')) return 'SAN';
+  if (c.includes('justic')) return 'JUS';
+  if (c.includes('consumo')) return 'CON';
+  if (c.includes('segurid') || c.includes('ciberestafa')) return 'SEC';
+  if (c.includes('catalu') || c.includes('independ')) return 'CAT';
+  if (c.includes('eco')) return 'ECO';
+  return 'GEN';
+}
+
+function getCategorySlug(category) {
+  return (category || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+}
+
+function getRelativeTime(dateStr) {
+  if (!dateStr) return 'Reciente';
+  try {
+    const pub = new Date(dateStr.replace(' ', 'T'));
+    const diffMs = Date.now() - pub.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 60) return `Hace ${diffMins} min`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `Hace ${diffHours} h`;
+    return pub.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
+  } catch (e) {
+    return 'Reciente';
+  }
+}
+
+function formatOriginalDate(dateStr) {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
+  } catch(e) {
+    return dateStr;
+  }
+}
+
+const getModuleStatusLabel = (status) => {
+  switch (status) {
+    case 'available': return 'Disponible';
+    case 'beta': return 'Beta';
+    case 'internal': return 'Interno';
+    case 'coming_soon': return 'Próximamente';
+    case 'disabled': return 'Desactivado';
+    default: return '';
+  }
+};
+---
+
+<Layout title="MATIZA — Contexto para decidir">
+  
+  <!-- Estilos Premium Adicionales para la Landing -->
+  <style is:inline>
+    .hero-gradient {
+      background: radial-gradient(circle at top, rgba(0, 240, 255, 0.08) 0%, rgba(157, 78, 221, 0.03) 40%, rgba(7, 9, 19, 0) 70%);
+      padding: 5rem 1.5rem 4rem;
+      text-align: center;
+      position: relative;
+    }
+    .landing-section {
+      padding: 4rem 1.5rem;
+      max-width: 1000px;
+      margin: 0 auto;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .value-card {
+      background: rgba(18, 22, 41, 0.35);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(10px);
+      border-radius: 16px;
+      padding: 2rem;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .value-card:hover {
+      transform: translateY(-4px);
+      border-color: rgba(0, 240, 255, 0.25);
+      box-shadow: 0 8px 30px rgba(0, 240, 255, 0.05);
+    }
+    .live-highlight {
+      background: linear-gradient(135deg, rgba(7, 9, 19, 0.9) 0%, rgba(18, 22, 41, 0.7) 100%);
+      border: 1px solid rgba(157, 78, 221, 0.3);
+      box-shadow: 0 0 30px rgba(157, 78, 221, 0.08);
+      border-radius: 20px;
+      padding: 2.5rem;
+      margin: 2rem 0;
+      position: relative;
+      overflow: hidden;
+    }
+    .live-highlight::before {
+      content: '';
+      position: absolute;
+      top: 0; right: 0;
+      width: 150px; height: 150px;
+      background: radial-gradient(circle, rgba(157, 78, 221, 0.15) 0%, rgba(157, 78, 221, 0) 70%);
+      pointer-events: none;
+    }
+    .status-badge {
+      font-size: 0.65rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      padding: 0.25rem 0.6rem;
+      border-radius: 20px;
+      letter-spacing: 0.05em;
+      display: inline-block;
+    }
+    .status-badge.available {
+      background: rgba(0, 240, 255, 0.1);
+      color: var(--neon-blue);
+      border: 1px solid rgba(0, 240, 255, 0.25);
+    }
+    .status-badge.beta {
+      background: rgba(157, 78, 221, 0.1);
+      color: var(--neon-purple);
+      border: 1px solid rgba(157, 78, 221, 0.25);
+    }
+    .status-badge.coming_soon {
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-muted);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .step-number {
+      font-family: var(--font-title);
+      font-size: 2.5rem;
+      font-weight: 900;
+      color: rgba(255, 255, 255, 0.07);
+      line-height: 1;
+      margin-bottom: 0.5rem;
+    }
+    .state-item {
+      padding: 0.75rem 1rem;
+      background: rgba(255, 255, 255, 0.02);
+      border-left: 3px solid var(--border-color);
+      border-radius: 0 8px 8px 0;
+      font-size: 0.85rem;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    .state-item:hover {
+      background: rgba(255, 255, 255, 0.04);
+      transform: translateX(4px);
+    }
+    .input-focus-trigger {
+      cursor: pointer;
+    }
+  </style>
+
+  <!-- 1. ═══ HERO SECTION ═══ -->
+  <section class="hero-gradient">
+    <div style="max-width: 800px; margin: 0 auto;">
+      <span class="status-badge available" style="margin-bottom: 1.5rem; text-transform: uppercase; font-weight: 800; font-size: 0.7rem; letter-spacing: 0.12em;">
+        COPILOTO DE CONTEXTO Y DECISIÓN
+      </span>
+      
+      <h1 style="font-size: 3.5rem; font-weight: 900; letter-spacing: -0.04em; line-height: 1.1; margin: 0 0 1.25rem 0; color: #ffffff; font-family: var(--font-title);">
+        Entiende lo que te están contando.
+      </h1>
+      
+      <p style="font-size: 1.15rem; color: var(--text-muted); line-height: 1.55; max-width: 680px; margin: 0 auto 2.5rem auto;">
+        MATIZA analiza noticias, vídeos y conversaciones, compara fuentes y te muestra qué sabemos, qué falta y qué conviene preguntar.
+      </p>
+
+      <!-- Buscador de Radar Integrado -->
+      <div style="max-width: 640px; margin: 0 auto 1.5rem auto;">
+        <div class="cyber-card" style="padding: 1rem 1.25rem; background: linear-gradient(180deg, rgba(18, 22, 41, 0.65) 0%, rgba(7, 9, 19, 0.9) 100%); border-color: rgba(0, 240, 255, 0.35); box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);">
+          <form action={`${cleanBase}/radar`} method="GET" style="display: flex; gap: 0.75rem; align-items: center; width: 100%;">
+            <div style="position: relative; flex: 1;">
+              <span style="position: absolute; left: 0.85rem; top: 50%; transform: translateY(-50%); font-size: 1.1rem; pointer-events: none; opacity: 0.6;">🔍</span>
+              <input 
+                id="hero-radar-input"
+                type="text" 
+                name="text" 
+                placeholder="Pega un enlace de TikTok, YouTube, X o escribe una frase para auditar..." 
+                required 
+                style="width: 100%; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); color: #fff; padding: 0.75rem 1rem 0.75rem 2.6rem; border-radius: 8px; font-size: 0.85rem; outline: none; transition: all 0.2s;" 
+              />
+            </div>
+            <button type="submit" class="cyber-btn accent" style="padding: 0.75rem 1.5rem; font-size: 0.85rem; border-radius: 8px; font-weight: 800; text-transform: uppercase; cursor: pointer; color: #fff;">
+              MATIZA ESTO
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- CTAs e Indicaciones -->
+      <div style="display: flex; align-items: center; justify-content: center; gap: 1.5rem; margin-bottom: 3rem; flex-wrap: wrap;">
+        <a href="#live" class="cyber-btn" style="padding: 0.7rem 1.5rem; font-size: 0.8rem; font-weight: 700; text-transform: uppercase; color: var(--neon-purple); border-color: rgba(157, 78, 221, 0.4); border-radius: 8px;">
+          ⚡ ACTIVAR MATIZA LIVE
+        </a>
+      </div>
+
+      <!-- Franja de confianza -->
+      <div style="border-top: 1px solid rgba(255, 255, 255, 0.05); padding-top: 1.5rem; display: flex; justify-content: center; gap: 2rem; font-size: 0.75rem; color: var(--text-muted); font-weight: 600; flex-wrap: wrap;">
+        <span>🛡️ Fuentes visibles</span>
+        <span>•</span>
+        <span>📝 Resultados revisables</span>
+        <span>•</span>
+        <span>🔒 Privacidad por defecto</span>
+      </div>
+
+      <!-- Disclaimer Metodológico / Incertidumbre -->
+      <p style="font-size: 0.7rem; color: rgba(255, 255, 255, 0.25); max-width: 580px; margin: 1.5rem auto 0 auto; line-height: 1.45;">
+        MATIZA no te dice qué pensar. Te ayuda a saber qué preguntar. Operamos bajo neutralidad metodológica, indicando la incertidumbre honesta cuando faltan registros públicos primarios.
+      </p>
+    </div>
+  </section>
+
+  <!-- 2. ═══ PROPUESTA DE VALOR ═══ -->
+  <section class="landing-section">
+    <div style="text-align: center; margin-bottom: 3.5rem;">
+      <h2 style="font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; font-family: var(--font-title); color: #ffffff; margin-bottom: 0.75rem;">
+        No solo comprueba lo que dicen.<br />Te ayuda a entenderlo y actuar.
+      </h2>
+      <p style="color: var(--text-muted); font-size: 0.95rem; max-width: 540px; margin: 0 auto;">
+        Contexto real para tomar mejores decisiones en un entorno saturado de ruido.
+      </p>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.75rem;">
+      
+      <div class="value-card">
+        <div style="font-size: 2rem; margin-bottom: 1rem; color: var(--neon-blue);">💡</div>
+        <h3 style="font-size: 1.25rem; font-weight: 700; color: #ffffff; margin-bottom: 0.5rem; font-family: var(--font-title);">Entiende</h3>
+        <p style="color: var(--text-muted); font-size: 0.88rem; line-height: 1.5; margin: 0;">
+          Separa hechos, opiniones, datos, indicios y afirmaciones sin demostrar de forma estructurada.
+        </p>
+      </div>
+
+      <div class="value-card">
+        <div style="font-size: 2rem; margin-bottom: 1rem; color: var(--neon-amber);">⚖️</div>
+        <h3 style="font-size: 1.25rem; font-weight: 700; color: #ffffff; margin-bottom: 0.5rem; font-family: var(--font-title);">Contrasta</h3>
+        <p style="color: var(--text-muted); font-size: 0.88rem; line-height: 1.5; margin: 0;">
+          Compara fuentes, documentos y versiones para mostrar qué está respaldado y qué falta.
+        </p>
+      </div>
+
+      <div class="value-card">
+        <div style="font-size: 2rem; margin-bottom: 1rem; color: var(--neon-purple);">🧠</div>
+        <h3 style="font-size: 1.25rem; font-weight: 700; color: #ffffff; margin-bottom: 0.5rem; font-family: var(--font-title);">Decide</h3>
+        <p style="color: var(--text-muted); font-size: 0.88rem; line-height: 1.5; margin: 0;">
+          Sugiere preguntas útiles, detecta riesgos de sesgo comercial y te ayuda a responder con criterio.
+        </p>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- 3. ═══ MATIZA LIVE ═══ -->
+  <section class="landing-section" id="live">
+    <div class="live-highlight">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+        <div>
+          <span class="status-badge beta" style="margin-bottom: 0.5rem;">Próximamente</span>
+          <h2 style="font-size: 1.85rem; font-weight: 800; letter-spacing: -0.02em; color: #ffffff; margin: 0; font-family: var(--font-title);">
+            Un copiloto que escucha contigo.
+          </h2>
+        </div>
+        <span style="font-family: monospace; color: var(--neon-purple); font-weight: 800; font-size: 0.8rem; letter-spacing: 0.05em; background: rgba(157, 78, 221, 0.08); padding: 0.35rem 0.75rem; border-radius: 8px; border: 1px solid rgba(157, 78, 221, 0.25);">
+          Lema: Escucha. Contrasta. Decide.
+        </span>
+      </div>
+
+      <p style="color: var(--text-muted); font-size: 0.95rem; line-height: 1.55; margin-bottom: 2rem; max-width: 780px;">
+        MATIZA Live detecta afirmaciones, contradicciones y riesgos mientras la conversación continúa. Te muestra fuentes y prepara las preguntas que faltan en tiempo real.
+      </p>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.25rem; margin-bottom: 2.5rem; text-align: left;">
+        <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.65rem;">
+          <li style="font-size: 0.85rem; color: #ffffff; display: flex; align-items: center; gap: 0.5rem;">
+            <span style="color: var(--neon-purple);">✔</span> Detecta claims mientras se habla.
+          </li>
+          <li style="font-size: 0.85rem; color: #ffffff; display: flex; align-items: center; gap: 0.5rem;">
+            <span style="color: var(--neon-purple);">✔</span> Señala cuándo falta una fuente primaria.
+          </li>
+          <li style="font-size: 0.85rem; color: #ffffff; display: flex; align-items: center; gap: 0.5rem;">
+            <span style="color: var(--neon-purple);">✔</span> Sugiere preguntas útiles e incisivas.
+          </li>
+          <li style="font-size: 0.85rem; color: #ffffff; display: flex; align-items: center; gap: 0.5rem;">
+            <span style="color: var(--neon-purple);">✔</span> Identifica riesgos legales, comerciales o informativos.
+          </li>
+        </ul>
+        <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.65rem;">
+          <li style="font-size: 0.85rem; color: #ffffff; display: flex; align-items: center; gap: 0.5rem;">
+            <span style="color: var(--neon-purple);">✔</span> Compara con verificaciones históricas.
+          </li>
+          <li style="font-size: 0.85rem; color: #ffffff; display: flex; align-items: center; gap: 0.5rem;">
+            <span style="color: var(--neon-purple);">✔</span> Guarda los puntos importantes de la sesión.
+          </li>
+          <li style="font-size: 0.85rem; color: #ffffff; display: flex; align-items: center; gap: 0.5rem;">
+            <span style="color: var(--neon-purple);">✔</span> Responde por voz solo cuando se lo pides.
+          </li>
+        </ul>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+        <button disabled class="cyber-btn" style="padding: 0.75rem 1.5rem; font-size: 0.85rem; font-weight: 800; border-radius: 10px; cursor: not-allowed; opacity: 0.6; color: var(--text-muted); border-color: rgba(255,255,255,0.1);">
+          PROBAR MATIZA LIVE (Próximamente)
+        </button>
+        <span style="font-size: 0.72rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.4rem;">
+          🔒 El micrófono solo se activa con tu permiso. El audio no se guarda por defecto.
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. ═══ ARQUITECTURA DE PRODUCTO Y MÓDULOS ═══ -->
+  <section class="landing-section">
+    <div style="text-align: center; margin-bottom: 3.5rem;">
+      <h2 style="font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; font-family: var(--font-title); color: #ffffff; margin-bottom: 0.75rem;">
+        Módulos Integrados de Decisión
+      </h2>
+      <p style="color: var(--text-muted); font-size: 0.95rem; max-width: 540px; margin: 0 auto;">
+        Navegación y ecosistema dinámico de MATIZA adaptado según tus necesidades de contexto.
+      </p>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem;">
+      
+      <!-- RADAR -->
+      <div class="value-card" style="display: flex; flex-direction: column; justify-content: space-between; border-color: rgba(0, 240, 255, 0.15);">
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <strong style="color: var(--neon-blue); font-family: var(--font-title); font-size: 1rem;">{modulesConfig.radar.name}</strong>
+            <span class="status-badge available">{getModuleStatusLabel(modulesConfig.radar.status)}</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.82rem; line-height: 1.45; margin-bottom: 1.5rem;">
+            {modulesConfig.radar.description}
+          </p>
+        </div>
+        <button onclick="document.getElementById('hero-radar-input').focus();" class="cyber-btn" style="padding: 0.5rem; font-size: 0.75rem; font-weight: 700; width: 100%; border-radius: 8px; color: var(--neon-blue); border-color: rgba(0, 240, 255, 0.25);">
+          {modulesConfig.radar.cta}
+        </button>
+      </div>
+
+      <!-- LIVE -->
+      <div class="value-card" style="display: flex; flex-direction: column; justify-content: space-between; border-color: rgba(157, 78, 221, 0.15);">
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <strong style="color: var(--neon-purple); font-family: var(--font-title); font-size: 1rem;">{modulesConfig.live.name}</strong>
+            <span class="status-badge coming_soon">{getModuleStatusLabel(modulesConfig.live.status)}</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.82rem; line-height: 1.45; margin-bottom: 1.5rem;">
+            {modulesConfig.live.description}
+          </p>
+        </div>
+        <button disabled class="cyber-btn" style="padding: 0.5rem; font-size: 0.75rem; font-weight: 700; width: 100%; border-radius: 8px; cursor: not-allowed; opacity: 0.6; color: var(--text-muted); border-color: rgba(255,255,255,0.05);">
+          PROBAR EN BETA
+        </button>
+      </div>
+
+      <!-- EXPLORA -->
+      <div class="value-card" style="display: flex; flex-direction: column; justify-content: space-between;">
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <strong style="color: #ffffff; font-family: var(--font-title); font-size: 1rem;">{modulesConfig.explore.name}</strong>
+            <span class="status-badge available">{getModuleStatusLabel(modulesConfig.explore.status)}</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.82rem; line-height: 1.45; margin-bottom: 1.5rem;">
+            {modulesConfig.explore.description}
+          </p>
+        </div>
+        <a href={cleanBase + modulesConfig.explore.link} class="cyber-btn" style="padding: 0.5rem; font-size: 0.75rem; font-weight: 700; text-align: center; border-radius: 8px; text-decoration: none; color: #fff; border-color: rgba(255,255,255,0.15);">
+          {modulesConfig.explore.cta}
+        </a>
+      </div>
+
+      <!-- POLÍTICA -->
+      <div class="value-card" style="display: flex; flex-direction: column; justify-content: space-between;">
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <strong style="color: #ffffff; font-family: var(--font-title); font-size: 1rem;">{modulesConfig.politics.name}</strong>
+            <span class="status-badge available">{getModuleStatusLabel(modulesConfig.politics.status)}</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.82rem; line-height: 1.45; margin-bottom: 1.5rem;">
+            {modulesConfig.politics.description}
+          </p>
+        </div>
+        <a href={cleanBase + modulesConfig.politics.link} class="cyber-btn" style="padding: 0.5rem; font-size: 0.75rem; font-weight: 700; text-align: center; border-radius: 8px; text-decoration: none; color: #fff; border-color: rgba(255,255,255,0.15);">
+          {modulesConfig.politics.cta}
+        </a>
+      </div>
+
+      <!-- JUSTICIA -->
+      <div class="value-card" style="display: flex; flex-direction: column; justify-content: space-between;">
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <strong style="color: #ffffff; font-family: var(--font-title); font-size: 1rem;">{modulesConfig.justice.name}</strong>
+            <span class="status-badge coming_soon">{getModuleStatusLabel(modulesConfig.justice.status)}</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.82rem; line-height: 1.45; margin-bottom: 1.5rem;">
+            {modulesConfig.justice.description}
+          </p>
+        </div>
+        <button disabled class="cyber-btn" style="padding: 0.5rem; font-size: 0.75rem; font-weight: 700; width: 100%; border-radius: 8px; cursor: not-allowed; opacity: 0.6; color: var(--text-muted); border-color: rgba(255,255,255,0.05);">
+          Próximamente
+        </button>
+      </div>
+
+      <!-- CONSUMO -->
+      <div class="value-card" style="display: flex; flex-direction: column; justify-content: space-between;">
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <strong style="color: #ffffff; font-family: var(--font-title); font-size: 1rem;">{modulesConfig.consumer.name}</strong>
+            <span class="status-badge coming_soon">{getModuleStatusLabel(modulesConfig.consumer.status)}</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.82rem; line-height: 1.45; margin-bottom: 1.5rem;">
+            {modulesConfig.consumer.description}
+          </p>
+        </div>
+        <button disabled class="cyber-btn" style="padding: 0.5rem; font-size: 0.75rem; font-weight: 700; width: 100%; border-radius: 8px; cursor: not-allowed; opacity: 0.6; color: var(--text-muted); border-color: rgba(255,255,255,0.05);">
+          Próximamente
+        </button>
+      </div>
+
+      <!-- PRO -->
+      <div class="value-card" style="display: flex; flex-direction: column; justify-content: space-between; grid-column: span 1;">
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <strong style="color: var(--neon-purple); font-family: var(--font-title); font-size: 1rem;">{modulesConfig.pro.name}</strong>
+            <span class="status-badge coming_soon">{getModuleStatusLabel(modulesConfig.pro.status)}</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.82rem; line-height: 1.45; margin-bottom: 1.5rem;">
+            {modulesConfig.pro.description}
+          </p>
+        </div>
+        <button disabled class="cyber-btn" style="padding: 0.5rem; font-size: 0.75rem; font-weight: 700; width: 100%; border-radius: 8px; cursor: not-allowed; opacity: 0.6; color: var(--text-muted); border-color: rgba(255,255,255,0.05);">
+          Próximamente
+        </button>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- 5. ═══ SECCIÓN CÓMO FUNCIONA ═══ -->
+  <section class="landing-section">
+    <div style="text-align: center; margin-bottom: 3.5rem;">
+      <h2 style="font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; font-family: var(--font-title); color: #ffffff; margin-bottom: 0.75rem;">
+        De lo que se dice a lo que puedes comprobar.
+      </h2>
+      <p style="color: var(--text-muted); font-size: 0.95rem; max-width: 540px; margin: 0 auto;">
+        Así opera la metodología de análisis de hechos y variables de contexto en MATIZA.
+      </p>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 2rem;">
+      
+      <div style="background: rgba(255,255,255,0.01); padding: 1.5rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
+        <div class="step-number">01</div>
+        <h4 style="color: #ffffff; font-size: 0.95rem; font-weight: 700; margin-bottom: 0.5rem;">Detección del Claim</h4>
+        <p style="color: var(--text-muted); font-size: 0.8rem; line-height: 1.45; margin: 0;">
+          MATIZA detecta la afirmación sospechosa a partir de vídeos, enlaces de redes o entradas textuales.
+        </p>
+      </div>
+
+      <div style="background: rgba(255,255,255,0.01); padding: 1.5rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
+        <div class="step-number">02</div>
+        <h4 style="color: #ffffff; font-size: 0.95rem; font-weight: 700; margin-bottom: 0.5rem;">Búsqueda de Contexto</h4>
+        <p style="color: var(--text-muted); font-size: 0.8rem; line-height: 1.45; margin: 0;">
+          Localiza registros primarios en bases oficiales (BOE, INE, Catastro) e información de contexto pertinente.
+        </p>
+      </div>
+
+      <div style="background: rgba(255,255,255,0.01); padding: 1.5rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
+        <div class="step-number">03</div>
+        <h4 style="color: #ffffff; font-size: 0.95rem; font-weight: 700; margin-bottom: 0.5rem;">Separación de Evidencia</h4>
+        <p style="color: var(--text-muted); font-size: 0.8rem; line-height: 1.45; margin: 0;">
+          Clasifica y separa lo confirmado y documentado frente a lo meramente sugerido o puramente especulativo.
+        </p>
+      </div>
+
+      <div style="background: rgba(255,255,255,0.01); padding: 1.5rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
+        <div class="step-number">04</div>
+        <h4 style="color: #ffffff; font-size: 0.95rem; font-weight: 700; margin-bottom: 0.5rem;">Detección de Vacíos</h4>
+        <p style="color: var(--text-muted); font-size: 0.8rem; line-height: 1.45; margin: 0;">
+          Señala explícitamente lo que falta y los datos necesarios que no se han hecho públicos.
+        </p>
+      </div>
+
+      <div style="background: rgba(255,255,255,0.01); padding: 1.5rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
+        <div class="step-number">05</div>
+        <h4 style="color: #ffffff; font-size: 0.95rem; font-weight: 700; margin-bottom: 0.5rem;">Sugerencia de Preguntas</h4>
+        <p style="color: var(--text-muted); font-size: 0.8rem; line-height: 1.45; margin: 0;">
+          Formula recomendaciones metodológicas e interrogantes que conviene preguntar para verificar la verdad.
+        </p>
+      </div>
+
+      <div style="background: rgba(255,255,255,0.01); padding: 1.5rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.02);">
+        <div class="step-number">06</div>
+        <h4 style="color: #ffffff; font-size: 0.95rem; font-weight: 700; margin-bottom: 0.5rem;">Revisión Profunda</h4>
+        <p style="color: var(--text-muted); font-size: 0.8rem; line-height: 1.45; margin: 0;">
+          Permite enviar la reclamación al buzón para su revisión por parte de moderadores y editores humanos.
+        </p>
+      </div>
+
+    </div>
+
+    <!-- Advertencia Metodológica -->
+    <div style="margin-top: 2.5rem; background: rgba(255, 183, 3, 0.03); border: 1px dashed rgba(255, 183, 3, 0.2); border-radius: 12px; padding: 1.25rem 1.5rem; text-align: left;">
+      <p style="margin: 0; font-size: 0.8rem; line-height: 1.45; color: var(--neon-amber);">
+        ⚠️ <strong>Advertencia Metodológica:</strong> MATIZA puede generar análisis provisionales y automáticos basados en inteligencia artificial. Los asuntos sensibles, complejos o valorativos requieren revisión humana cualificada y el contraste con fuentes adicionales secundarias.
+      </p>
+    </div>
+  </section>
+
+  <!-- 6. ═══ ESTADOS DEL ANÁLISIS ═══ -->
+  <section class="landing-section">
+    <div style="text-align: center; margin-bottom: 3.5rem;">
+      <h2 style="font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; font-family: var(--font-title); color: #ffffff; margin-bottom: 0.75rem;">
+        Estados de la Evaluación
+      </h2>
+      <p style="color: var(--text-muted); font-size: 0.95rem; max-width: 540px; margin: 0 auto;">
+        Evitamos categorizaciones binarias de verdadero/falso. Los hechos se analizan bajo múltiples capas de certeza y contexto.
+      </p>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; text-align: left;">
+      <div class="state-item" style="border-left-color: var(--neon-green);">
+        <span style="color: var(--neon-green); display: block; font-size: 0.9rem; margin-bottom: 0.25rem;">Confirmado</span>
+        <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal;">Respaldado al 100% por registros públicos oficiales y coincidentes.</span>
+      </div>
+      <div class="state-item" style="border-left-color: var(--neon-green);">
+        <span style="color: var(--neon-green); display: block; font-size: 0.9rem; margin-bottom: 0.25rem;">Respaldado por fuentes</span>
+        <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal;">Suficientes fuentes de alta autoridad y fiabilidad corroboran los datos.</span>
+      </div>
+      <div class="state-item" style="border-left-color: var(--neon-amber);">
+        <span style="color: var(--neon-amber); display: block; font-size: 0.9rem; margin-bottom: 0.25rem;">Falta contexto</span>
+        <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal;">La información es fáctica pero omite datos esenciales que modifican su sentido.</span>
+      </div>
+      <div class="state-item" style="border-left-color: var(--neon-rose);">
+        <span style="color: var(--neon-rose); display: block; font-size: 0.9rem; margin-bottom: 0.25rem;">Engañoso</span>
+        <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal;">Mezcla elementos verdaderos con falsos para inducir a una conclusión errónea.</span>
+      </div>
+      <div class="state-item" style="border-left-color: var(--neon-rose);">
+        <span style="color: var(--neon-rose); display: block; font-size: 0.9rem; margin-bottom: 0.25rem;">Sin pruebas suficientes</span>
+        <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal;">La afirmación carece de sustento documental u oficial contrastable.</span>
+      </div>
+      <div class="state-item" style="border-left-color: var(--neon-amber);">
+        <span style="color: var(--neon-amber); display: block; font-size: 0.9rem; margin-bottom: 0.25rem;">Versiones contradictorias</span>
+        <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal;">Existen versiones y documentos contrapuestos de igual nivel de autoridad.</span>
+      </div>
+      <div class="state-item" style="border-left-color: var(--neon-purple);">
+        <span style="color: var(--neon-purple); display: block; font-size: 0.9rem; margin-bottom: 0.25rem;">Pendiente de investigación</span>
+        <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal;">El claim ha sido registrado y está siendo evaluado activamente.</span>
+      </div>
+      <div class="state-item" style="border-left-color: var(--text-muted);">
+        <span style="color: var(--text-muted); display: block; font-size: 0.9rem; margin-bottom: 0.25rem;">No verificable todavía</span>
+        <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal;">No existen datos oficiales liberados que permitan probar o desmentir.</span>
+      </div>
+      <div class="state-item" style="border-left-color: var(--neon-purple);">
+        <span style="color: var(--neon-purple); display: block; font-size: 0.9rem; margin-bottom: 0.25rem;">Requiere revisión humana</span>
+        <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal;">La complejidad semántica o el sesgo requiere auditoría y firma de un editor.</span>
+      </div>
+      <div class="state-item" style="border-left-color: var(--neon-amber);">
+        <span style="color: var(--neon-amber); display: block; font-size: 0.9rem; margin-bottom: 0.25rem;">Sentencia no firme</span>
+        <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal;">Hecho sujeto a resolución judicial recurrida o pendiente de apelación.</span>
+      </div>
+      <div class="state-item" style="border-left-color: var(--neon-rose);">
+        <span style="color: var(--neon-rose); display: block; font-size: 0.9rem; margin-bottom: 0.25rem;">Acusación no probada</span>
+        <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal;">Aseveración incriminatoria que carece de veredicto firme de culpabilidad.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7. ═══ COPY DE CONFIANZA ═══ -->
+  <section class="landing-section">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 3rem; align-items: center;">
+      <div>
+        <h2 style="font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; font-family: var(--font-title); color: #ffffff; margin-bottom: 1rem; line-height: 1.2;">
+          No te pedimos que confíes a ciegas.
+        </h2>
+        <p style="color: var(--text-muted); font-size: 0.95rem; line-height: 1.55; margin: 0;">
+          Cada análisis debe mostrar sus fuentes, su nivel de confianza, lo que no sabemos y por qué se alcanza una conclusión determinada. La transparencia total es nuestro único código.
+        </p>
+      </div>
+
+      <div style="background: rgba(18, 22, 41, 0.25); border: 1px solid rgba(255,255,255,0.03); padding: 2rem; border-radius: 16px;">
+        <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 1rem; text-align: left;">
+          <li style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.4;">
+            <strong style="color: #ffffff; display: block; margin-bottom: 0.2rem;">📎 Fuentes originales</strong>
+            Enlaces y referencias a documentos del BOE, INE, registros o boletines oficiales accesibles por cualquier usuario.
+          </li>
+          <li style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.4;">
+            <strong style="color: #ffffff; display: block; margin-bottom: 0.2rem;">⚖️ Hechos frente a indicios</strong>
+            Clara delimitación conceptual de lo probado empíricamente frente a indicios probables y opiniones personales.
+          </li>
+          <li style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.4;">
+            <strong style="color: #ffffff; display: block; margin-bottom: 0.2rem;">🔍 Incertidumbre explicada</strong>
+            Señalamiento y explicación metodológica de lo que el portal o la IA no puede certificar con el corpus disponible.
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8. ═══ FEED DE VERIFICACIONES REALES ═══ -->
+  <section class="landing-section">
+    
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2.5rem; flex-wrap: wrap; gap: 1rem;">
+      <div>
+        <h2 style="font-size: 1.75rem; font-weight: 800; color: #ffffff; margin: 0; font-family: var(--font-title); letter-spacing: -0.02em;">
+          Últimas Auditorías del Radar
+        </h2>
+        <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem; margin-bottom: 0;">
+          Casos reales de desinformación e hilos de contexto analizados por nuestros motores.
+        </p>
+      </div>
+      
+      <!-- Selector de Categorías -->
+      <div class="no-scrollbar" style="display: flex; gap: 0.4rem; overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 480px;">
+        <a href={cleanBase || "/"} class="cyber-btn" style="padding: 0.35rem 0.85rem; font-size: 0.7rem; border-radius: 30px; background: rgba(0, 240, 255, 0.05); border-color: rgba(0,240,255,0.15); color: var(--neon-blue); white-space: nowrap;">Todos</a>
+        {categories.map(c => (
+          <a href={`${cleanBase}/categoria/${c.slug}`} class="cyber-btn" style="padding: 0.35rem 0.85rem; font-size: 0.7rem; border-radius: 30px; white-space: nowrap; color: var(--text-muted); border-color: rgba(255,255,255,0.06);">
+            {c.name}
+          </a>
+        ))}
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 2rem;">
+
+      {hasArticles ? (
+        <>
+          {/* Ficha Destacada */}
+          {featuredArticle && (
+            <div class={"cyber-card " + getVerdictClass(featuredArticle.verdict)} style="padding: 2rem; background: linear-gradient(180deg, rgba(18, 22, 41, 0.75) 0%, rgba(7, 9, 19, 0.95) 100%);">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 1rem;">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                  <a href={`${cleanBase}/categoria/${getCategorySlug(featuredArticle.category)}`} style="text-decoration: none;" title={`Categoría: ${featuredArticle.category}`}>
+                    <div style="width: 38px; height: 38px; border-radius: 50%; background: rgba(0, 240, 255, 0.1); border: 1px solid rgba(0, 240, 255, 0.25); display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 800; color: var(--neon-blue);">
+                      {getCategoryInitials(featuredArticle.category)}
+                    </div>
+                  </a>
+                  <div>
+                    <a href={`${cleanBase}/tema/${featuredArticle.topic_slug}`} style="font-size: 0.85rem; font-weight: 700; color: var(--text-main); display: block;">
+                      {featuredArticle.topic_title}
+                    </a>
+                    <span style="font-size: 0.7rem; color: var(--text-muted); display: block;">
+                      Categoría: <a href={`${cleanBase}/categoria/${getCategorySlug(featuredArticle.category)}`} style="color: var(--neon-blue); text-decoration: none; font-weight: 700;">{featuredArticle.category}</a> &bull; Incorporado: <strong style="color: var(--neon-blue);">{getRelativeTime(featuredArticle.published_at)}</strong>
+                    </span>
+                    <div style="margin-top: 0.25rem; font-size: 0.7rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                      <span style="background: rgba(157, 78, 221, 0.12); border: 1px solid rgba(157, 78, 221, 0.3); border-radius: 4px; padding: 0.1rem 0.4rem; color: #ffffff; font-weight: bold;">
+                        {featuredArticle.emoji_tag || '🧊 Falta contexto'}
+                      </span>
+                      <span style="font-family: monospace; color: var(--neon-amber); font-weight: 800;">
+                        🌡️ Termómetro: {featuredArticle.matiza_score || 50}%
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                
+                <span class="status-badge" style={`background: rgba(255,255,255,0.03); color: ${getVerdictColor(featuredArticle.verdict)}; border: 1px solid ${getVerdictColor(featuredArticle.verdict)};`}>
+                  {featuredArticle.verdict}
+                </span>
+              </div>
+
+              <div style="margin-bottom: 1.5rem;">
+                <a href={`${cleanBase}/noticia/${featuredArticle.slug}`}>
+                  <h3 style="font-size: 1.6rem; line-height: 1.25; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.75rem; color: var(--text-main); font-family: var(--font-title);">
+                    {featuredArticle.title}
+                  </h3>
+                </a>
+                <p style="font-size: 0.92rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1.25rem;">
+                  {featuredArticle.subtitle}
+                </p>
+                {featuredArticle.multimedia_url && (
+                  <div style="margin-bottom: 1.25rem; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); max-height: 360px; background: #000; display: flex; align-items: center; justify-content: center;">
+                    <img src={featuredArticle.multimedia_url} alt="Portada" style="width: 100%; height: 100%; object-fit: cover; max-height: 360px;" />
+                  </div>
+                )}
+              </div>
+
+              <div style="background: rgba(255, 51, 102, 0.01); border-left: 2px solid var(--neon-rose); padding: 1rem 1.25rem; border-radius: 0 12px 12px 0; margin-bottom: 1.5rem;">
+                <span style="font-weight: 800; color: var(--neon-rose); text-transform: uppercase; font-size: 0.65rem; letter-spacing: 0.05em; display: block; margin-bottom: 0.25rem;">Declaración viral:</span>
+                <p style="font-style: italic; color: var(--text-main); font-size: 0.95rem; font-weight: 500; line-height: 1.4; margin: 0;">
+                  "{featuredArticle.claim}"
+                </p>
+              </div>
+
+              <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border-color); padding-top: 1rem;">
+                <span style="font-size: 0.75rem; color: var(--text-muted);">
+                  Origen: <strong style="color: var(--text-main);">{featuredArticle.origin_platform}</strong>
+                  {featuredArticle.origin_date && (
+                    <span> &bull; Post original: <strong style="color: var(--text-main);">{formatOriginalDate(featuredArticle.origin_date)}</strong></span>
+                  )}
+                </span>
+                <a href={`${cleanBase}/noticia/${featuredArticle.slug}`} class="cyber-btn accent" style="padding: 0.5rem 1.25rem; font-size: 0.75rem; border-radius: 12px; color: #fff;">
+                  Verificar &rarr;
+                </a>
+              </div>
+            </div>
+          )}
+
+          {/* Feed de Verificaciones Secundarias */}
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.5rem;">
+            {remainingArticles.map(art => (
+              <div class={"cyber-card " + getVerdictClass(art.verdict)} style="padding: 1.5rem; background: rgba(18, 22, 41, 0.35); display: flex; flex-direction: column; justify-content: space-between;">
+                <div>
+                  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                      <a href={`${cleanBase}/categoria/${getCategorySlug(art.category)}`} style="text-decoration: none;" title={`Categoría: ${art.category}`}>
+                        <div style="width: 28px; height: 28px; border-radius: 50%; background: rgba(255,255,255,0.05); display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 800; color: var(--text-muted);">
+                          {getCategoryInitials(art.category)}
+                        </div>
+                      </a>
+                      <div>
+                        <a href={`${cleanBase}/tema/${art.topic_slug}`} style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); display: block;">
+                          {art.topic_title}
+                        </a>
+                        <span style="font-size: 0.65rem; color: var(--text-muted); display: block;">
+                          {getRelativeTime(art.published_at)}
+                        </span>
+                      </div>
+                    </div>
+                    <span class="status-badge" style={`font-size: 0.6rem; background: rgba(255,255,255,0.02); color: ${getVerdictColor(art.verdict)}; border-color: ${getVerdictColor(art.verdict)};`}>
+                      {art.verdict}
+                    </span>
+                  </div>
+
+                  <div style="margin-bottom: 1.25rem;">
+                    <a href={`${cleanBase}/noticia/${art.slug}`}>
+                      <h4 style="font-size: 1.2rem; font-weight: 700; line-height: 1.3; margin-bottom: 0.5rem; color: var(--text-main); font-family: var(--font-title);">
+                        {art.title}
+                      </h4>
+                    </a>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.45; margin-bottom: 1rem;">
+                      {art.subtitle}
+                    </p>
+                    {art.multimedia_url && (
+                      <div style="margin-bottom: 1rem; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.06); max-height: 180px; background: #000; display: flex; align-items: center; justify-content: center;">
+                        <img src={art.multimedia_url} alt="Portada" style="width: 100%; height: 100%; object-fit: cover; max-height: 180px;" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border-color); padding-top: 0.75rem; font-size: 0.7rem;">
+                  <span style="color: var(--text-muted);">
+                    Vía: <strong style="color: var(--text-main);">{art.origin_platform}</strong>
+                  </span>
+                  <a href={`${cleanBase}/noticia/${art.slug}`} class="cyber-btn" style="padding: 0.35rem 0.85rem; font-size: 0.7rem; border-radius: 10px; color: var(--neon-blue); border-color: rgba(0, 240, 255, 0.15); text-decoration: none;">
+                    Verificar &rarr;
+                  </a>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div style="text-align: center; padding: 3rem; background: rgba(18,22,41,0.2); border-radius: 16px; border: 1px dashed rgba(255,255,255,0.05);">
+          <h3 style="color: #ffffff; font-family: var(--font-title); font-size: 1.2rem; margin-bottom: 0.5rem;">El Radar está Limpio</h3>
+          <p style="color: var(--text-muted); font-size: 0.85rem; max-width: 480px; margin: 0 auto 1.5rem auto;">
+            No hay verificaciones publicadas en este momento. El radar está monitorizando redes en busca de afirmaciones virales.
+          </p>
+          <a href={`${cleanBase}/temas`} class="cyber-btn accent" style="padding: 0.6rem 1.25rem; font-size: 0.8rem; border-radius: 8px; text-decoration: none; color: #fff;">
+            Explorar Expedientes Vivos
+          </a>
+        </div>
+      )}
+
+    </div>
+  </section>
+
+  <!-- 9. ═══ CONFUSÓMETRO / ALERTAS DE RUIDO ═══ -->
+  <section class="landing-section">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 2rem;">
+      
+      <!-- Confusómetro -->
+      <div class="cyber-card" style="padding: 1.5rem; background: linear-gradient(135deg, rgba(157, 78, 221, 0.05) 0%, rgba(7, 9, 19, 0.95) 100%); flex: 1;">
+        <h3 style="font-size: 1.1rem; font-weight: 700; color: var(--neon-purple); margin-bottom: 1rem; font-family: var(--font-title); letter-spacing: -0.01em;">
+          Confusómetro: Alerta de Ruido por Tema
+        </h3>
+        <div style="display: flex; flex-direction: column; gap: 1.1rem;">
+          {topics.slice(0, 5).map(t => (
+            <div>
+              <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.35rem;">
+                <span style="font-weight: 700; color: var(--text-main);">{t.title}</span>
+                <span style="font-weight: 800; color: var(--neon-rose);">{t.noise_level}%</span>
+              </div>
+              <div style="background: rgba(7, 9, 19, 0.6); height: 6px; border: 1px solid var(--border-color); border-radius: 10px; overflow: hidden;">
+                <div style={`background: linear-gradient(90deg, var(--neon-purple), var(--neon-rose)); width: ${t.noise_level}%; height: 100%;`}></div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <!-- Buzón de Intercepción Teaser -->
+      <div class="cyber-card" style="padding: 1.65rem; background: linear-gradient(185deg, rgba(7, 9, 19, 0.95) 0%, rgba(18, 22, 41, 0.8) 100%); border-color: var(--neon-blue); flex: 1; display: flex; flex-direction: column; justify-content: space-between;">
+        <div>
+          <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
+            <span style="font-size: 1.5rem;">📥</span>
+            <h3 style="font-size: 1.2rem; font-weight: 800; color: var(--neon-blue); margin: 0; letter-spacing: -0.01em; font-family: var(--font-title);">Buzón de Intercepción</h3>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.82rem; line-height: 1.5; margin-bottom: 1.5rem;">
+            ¿Has detectado un bulo sospechoso o una publicación viral en TikTok, YouTube, Instagram o X? Envía el enlace al radar. Nuestro motor contrastará los hechos con las leyes vigentes del BOE y los datos macroeconómicos del INE de forma neutral.
+          </p>
+        </div>
+        <a href={`${cleanBase}/interceptor`} class="cyber-btn accent" style="display: inline-flex; align-items: center; justify-content: center; padding: 0.75rem; border-radius: 8px; font-weight: 800; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; text-decoration: none; text-align: center; color: #fff;">
+          Acceder al Interceptor &rarr;
+        </a>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- 10. ═══ CTA FINAL ═══ -->
+  <section class="landing-section" style="text-align: center; padding: 5rem 1.5rem; border-bottom: none;">
+    <div style="max-width: 600px; margin: 0 auto;">
+      <h2 style="font-size: 2.2rem; font-weight: 900; letter-spacing: -0.03em; color: #ffffff; font-family: var(--font-title); margin-bottom: 1rem; line-height: 1.15;">
+        Antes de creerlo, compartirlo o firmarlo, matízalo.
+      </h2>
+      <p style="color: var(--text-muted); font-size: 1rem; line-height: 1.5; margin-bottom: 2.5rem;">
+        Pega una afirmación o activa MATIZA Live y descubre qué sabes realmente.
+      </p>
+
+      <div style="display: flex; gap: 1.25rem; justify-content: center; flex-wrap: wrap;">
+        <button onclick="window.scrollTo({ top: 0, behavior: 'smooth' }); document.getElementById('hero-radar-input').focus();" class="cyber-btn accent" style="padding: 0.8rem 1.75rem; font-size: 0.85rem; font-weight: 800; border-radius: 8px; cursor: pointer; color: #fff;">
+          MATIZA ESTO
+        </button>
+        <a href="#live" class="cyber-btn" style="padding: 0.8rem 1.75rem; font-size: 0.85rem; font-weight: 800; border-radius: 8px; text-decoration: none; color: var(--neon-purple); border-color: rgba(157, 78, 221, 0.45);">
+          PROBAR MATIZA LIVE
+        </a>
+      </div>
+    </div>
+  </section>
+
+</Layout>

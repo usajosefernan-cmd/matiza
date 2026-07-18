@@ -1,0 +1,1513 @@
+---
+export const prerender = true;
+import Layout from '../../layouts/Layout.astro';
+import { getDatabase } from '../../lib/db.js';
+import path from 'node:path';
+import { topicDidacticData } from '../../data/topicDidacticData.js';
+
+const { slug } = Astro.params;
+
+const db = getDatabase();
+
+// Cargar información del tema y su sección
+const topic = db.prepare(`
+  SELECT t.*, th.slug as theme_slug, th.name as theme_name
+  FROM topics t
+  LEFT JOIN themes th ON t.theme_id = th.id
+  WHERE t.slug = ?
+`).get(slug) as any;
+
+if (!topic) {
+  db.close();
+  return Astro.redirect('/404');
+}
+
+// Cargar artículos relacionados publicados
+const articles = db.prepare(`
+  SELECT * FROM articles 
+  WHERE topic_id = ? AND status = 'publicado' 
+  ORDER BY published_at DESC
+`).all(topic.id) as any[];
+
+const articlesWithTags = articles.map(art => {
+  const tags = db.prepare(`
+    SELECT t.name, t.slug
+    FROM article_tags at
+    JOIN tags t ON at.tag_id = t.id
+    WHERE at.article_id = ?
+  `).all(art.id) as any[];
+  return { ...art, tags };
+});
+
+// Obtener propuestas políticas del área correspondiente al tema
+let areaMapping = null;
+const lowerSlug = slug.toLowerCase();
+if (lowerSlug.includes('vivienda')) {
+  areaMapping = 'Vivienda';
+} else if (lowerSlug.includes('fiscalidad') || lowerSlug.includes('impuestos') || lowerSlug.includes('ahorro') || lowerSlug.includes('catalunya') || lowerSlug.includes('autonomos')) {
+  areaMapping = 'Fiscalidad';
+}
+
+let policyMeasures = [];
+if (areaMapping) {
+  policyMeasures = db.prepare(`
+    SELECT pm.*, p.name as party_name, p.slug as party_slug
+    FROM policy_measures pm
+    JOIN parties p ON pm.party_id = p.id
+    WHERE pm.area = ?
+  `).all(areaMapping);
+}
+
+db.close();
+
+// Mapa de veredicto a color neón
+const getVerdictClass = (verdict) => {
+  const v = verdict.toLowerCase();
+  if (v.includes('verdadero')) return 'green';
+  if (v.includes('falso')) return 'rose';
+  if (v.includes('engañoso') || v.includes('contexto')) return 'amber';
+  return 'purple';
+};
+
+// Iniciales ilustrativas de categoría para avatares minimalistas
+function getCategoryInitials(category) {
+  const c = (category || '').toLowerCase();
+  if (c.includes('migr') || c.includes('socied')) return 'MG';
+  if (c.includes('vivien') || c.includes('okupa')) return 'VV';
+  if (c.includes('impues') || c.includes('ahorr') || c.includes('econ')) return 'EC';
+  if (c.includes('polit') || c.includes('parti')) return 'PL';
+  return 'EX';
+}
+
+const educationalCards = {
+  'vivienda-y-okupacion': [
+    { 
+      title: '1. Allanamiento vs Usurpación (Morada vs Vacío)', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.75rem;">La distinción jurídica es clave y determina la actuación de las Fuerzas de Seguridad:</p>
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 0.5rem; margin-bottom: 0.5rem; text-align: left;">
+          <thead>
+            <tr style="border-bottom: 2px solid rgba(0, 240, 255, 0.25);">
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Concepto</th>
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Allanamiento (Morada)</th>
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Usurpación (Vacío)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <td style="padding: 0.4rem; font-weight: bold;">Inmueble</td>
+              <td style="padding: 0.4rem;">Vivienda habitada (1ª o 2ª residencia)</td>
+              <td style="padding: 0.4rem;">Inmueble vacío, abandonado o sin amueblar</td>
+            </tr>
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <td style="padding: 0.4rem; font-weight: bold;">Desalojo</td>
+              <td style="padding: 0.4rem; color: var(--neon-green);">Inmediato, sin orden judicial (delito flagrante)</td>
+              <td style="padding: 0.4rem; color: var(--neon-rose);">Requiere proceso judicial previo ante juez de instrucción</td>
+            </tr>
+            <tr>
+              <td style="padding: 0.4rem; font-weight: bold;">Pena CP</td>
+              <td style="padding: 0.4rem;">Prisión de 6 meses a 2 años (art. 202 CP)</td>
+              <td style="padding: 0.4rem;">Multa de 3 a 6 meses (art. 245 CP)</td>
+            </tr>
+          </tbody>
+        </table>
+      ` 
+    },
+    { 
+      title: '2. El Mito de las 48 Horas', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.75rem;"><strong>No existe ninguna referencia temporal de 48 horas en la legislación española</strong> para proceder a un desalojo policial por allanamiento:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.75rem; display: flex; flex-direction: column; gap: 0.4rem;">
+          <li>La policía puede intervenir en cualquier momento si se acredita que el inmueble es la <strong>morada</strong> de la víctima.</li>
+          <li>La flagrancia del delito no prescribe por el mero transcurso del tiempo, sino por la consolidación de la posesión, la cual en moradas habitadas no es aplicable.</li>
+          <li>En usurpaciones (pisos de bancos vacíos), el desalojo cautelar inmediato también es viable penalmente si se solicita al juez en las primeras fases del proceso (Instrucción 1/2020 de Fiscalía General).</li>
+        </ul>
+      ` 
+    },
+    { 
+      title: '3. Segunda Residencia y el Protocolo de 2020', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La <strong>Instrucción 6/2020 de la Secretaría de Estado de Seguridad</strong> unifica la actuación policial en España:</p>
+        <blockquote style="border-left: 3px solid var(--neon-blue); padding-left: 0.75rem; margin: 0.5rem 0; font-style: italic; font-size: 0.82rem; color: var(--text-muted);">
+          "Las segundas residencias (pisos de vacaciones) gozan de la misma protección constitucional de inviolabilidad del domicilio que la primera vivienda. El acceso no consentido constituye allanamiento."
+        </blockquote>
+        <p style="margin-top: 0.5rem;">La policía procederá al desalojo inmediato y detención de los intrusos si se constata la entrada forzada o ilegítima en la vivienda de vacaciones.</p>
+      ` 
+    },
+    {
+      title: '4. Okupación en Alquiler (Inquiokupación) y Ley de Vivienda',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">El impago del alquiler no se rige por el Código Penal de forma ordinaria:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>Es un incumplimiento de contrato de naturaleza civil regulado por la <strong>Ley de Arrendamientos Urbanos (LAU)</strong>.</li>
+          <li>La Ley de Vivienda de 2023 introduce trámites de mediación obligatorios y protección de vulnerabilidad para suspender temporalmente lanzamientos, pero únicamente en demandas de desahucio civil por impago, no en allanamientos delictivos.</li>
+        </ul>
+      `
+    }
+  ],
+  'inmigracion-y-convivencia': [
+    { 
+      title: '1. Cotización Extranjera vs Sostenimiento de Pensiones', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">Datos oficiales de la Tesorería General de la Seguridad Social sobre la aportación de los trabajadores extranjeros:</p>
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 0.5rem; margin-bottom: 0.5rem; text-align: left;">
+          <thead>
+            <tr style="border-bottom: 2px solid rgba(0, 240, 255, 0.25);">
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Métrica</th>
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Año 2024 / Reciente</th>
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Porcentaje sobre el Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <td style="padding: 0.4rem; font-weight: bold;">Afiliados Extranjeros</td>
+              <td style="padding: 0.4rem;">2,8 millones de cotizantes</td>
+              <td style="padding: 0.4rem;">13,4% del total nacional</td>
+            </tr>
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <td style="padding: 0.4rem; font-weight: bold;">Sectores Clave</td>
+              <td style="padding: 0.4rem;">Agricultura, Hostelería, Construcción y Hogar</td>
+              <td style="padding: 0.4rem;">Superior al 25% en estos ramos</td>
+            </tr>
+            <tr>
+              <td style="padding: 0.4rem; font-weight: bold;">Tasa de Dependencia</td>
+              <td style="padding: 0.4rem;">Ayuda a equilibrar el ratio cotizante/jubilado</td>
+              <td style="padding: 0.4rem;">Perfil de edad joven (18-45 años)</td>
+            </tr>
+          </tbody>
+        </table>
+      ` 
+    },
+    { 
+      title: '2. Acceso a Ayudas Sociales (Bulos de Preferencia)', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La Ley General de la Seguridad Social y la Ley de Transparencia regulan el acceso a las prestaciones asistenciales en España:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li><strong>Principio de Igualdad</strong>: Las ayudas se otorgan por nivel de renta, cargas familiares y vulnerabilidad, nunca por origen.</li>
+          <li><strong>Ingreso Mínimo Vital (IMV)</strong>: Los solicitantes extranjeros deben acreditar <strong>residencia legal y efectiva en España durante al menos 1 año ininterrumpido</strong> antes de la solicitud (excepto refugiados o víctimas de trata).</li>
+          <li>Los inmigrantes en situación administrativa irregular (sin papeles) no pueden acceder al IMV ni a prestaciones contributivas del SEPE.</li>
+        </ul>
+      ` 
+    },
+    { 
+      title: '3. El Protocolo de Tutela de Menores (MENAS)', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La protección del menor extranjero no acompañado se rige por normas nacionales e internacionales superiores:</p>
+        <div style="background: rgba(255,255,255,0.02); border-left: 3px solid var(--neon-purple); padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; border-radius: 0 6px 6px 0;">
+          <strong>Artículo 172 del Código Civil</strong>: Faculta al servicio de protección de menores autonómico a asumir la tutela por ministerio de la ley de todo menor desamparado localizado en su territorio.
+        </div>
+        <p style="font-size: 0.8rem; color: var(--text-muted);">Los menores no pueden ser expulsados de forma sumaria. Cualquier proceso de retorno debe tramitarse garantizando el interés superior del menor y su reagrupación familiar segura.</p>
+      ` 
+    },
+    {
+      title: '4. El Bulo de la "Paguita de Llegada" de 600€',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">Es falso que el Estado abone un sueldo o nómina a los inmigrantes por entrar a España:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>Los programas de primera acogida de Cruz Roja u otras ONG solo proveen alojamiento básico temporal, manutención y ayuda sanitaria de emergencia.</li>
+          <li>No existen prestaciones económicas periódicas asignadas por nacionalidad u origen irregular en la cartera de servicios sociales del Estado.</li>
+        </ul>
+      `
+    }
+  ],
+  'menores-extranjeros-no-acompanados': [
+    {
+      title: '1. El Protocolo de Determinación de la Edad',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">Las pruebas radiológicas para dilucidar la minoría de edad de los extranjeros indocumentados:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>Se realizan pruebas de la muñeca (greulich-pyle) u ortopantomografía bucal bajo autorización y supervisión del Fiscal de Menores.</li>
+          <li>Organismos internacionales como el Comité de Derechos del Niño de la ONU exigen priorizar las pruebas no invasivas y el principio de presunción de minoría de edad ante márgenes de error científicos elevados.</li>
+        </ul>
+      `
+    },
+    {
+      title: '2. Competencias de Tutela y Guarda (Art. 172 Código Civil)',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La asunción de la tutela de menores no acompañados por los servicios autonómicos:</p>
+        <p style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.45;">La competencia de la tutela de los menores desamparados recae de forma exclusiva sobre la Comunidad Autónoma donde se localice físicamente al menor, la cual asume la guarda ex lege de forma automática e inmediata.</p>
+      `
+    },
+    {
+      title: '3. El Bulo del "Sueldo de 600€" al cumplir 18 años',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">Las ayudas de transición al cumplir la mayoría de edad están sujetas a condiciones muy estrictas:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>No existe una paga automática por ser ex-MENA.</li>
+          <li>Las rentas de inserción autónomas para jóvenes extutelados exigen acreditar estar cursando estudios de formación reglada obligatoria o programas activos de empleo y carecer de ingresos. Su cuantía varía según la CCAA y se retira en caso de incomparecencia laboral.</li>
+        </ul>
+      `
+    },
+    {
+      title: '4. Delincuencia Juvenil y Fiscalía de Menores',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">Las estadísticas de criminalidad de la Fiscalía General del Estado demuestran que:</p>
+        <p style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.45;">más del 90% de las infracciones y delitos cometidos por menores en el territorio nacional corresponden a jóvenes de nacionalidad española. Los delitos graves asociados a bandas se persiguen judicialmente con independencia de la nacionalidad del imputado.</p>
+      `
+    }
+  ],
+  'caso-begona-gomez': [
+    {
+      title: '1. Tráfico de Influencias y Corrupción (Art. 429 CP)',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">El Código Penal español regula de forma restrictiva el delito de tráfico de influencias:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>Exige que un particular o funcionario ejerza una influencia indebida prevaliéndose de su situación personal o de su relación con otro funcionario público para obtener un beneficio económico directo o indirecto.</li>
+          <li>La mera recomendación o la existencia de una relación familiar no constituye delito si no se acredita un prevalecimiento efectivo que tuerza la voluntad de la administración pública.</li>
+        </ul>
+      `
+    },
+    {
+      title: '2. Valor Procesal de los Informes de la UCO',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La Unidad Central Operativa (UCO) de la Guardia Civil actáa como policía judicial:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem;">
+          <li>Sus informes recogen hechos, correos y flujos económicos a solicitud del juez instructor, pero carecen de valor de sentencia.</li>
+          <li>En sus informes preliminares del caso, la UCO no constatí indicios que vinculen la adjudicación de Red.es a las cartas de recomendación firmadas por Begoña Gómez, seáalando que las licitaciones siguieron los cauces formales ordinarios de contratación pública.</li>
+        </ul>
+      `
+    },
+    {
+      title: '3. El Rol de las Acusaciones Populares',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">El artículo 125 de la Constitución faculta a los ciudadanos a personarse en el proceso penal:</p>
+        <p style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.45;">Asociaciones particulares pueden presentar querellas y pedir diligencias. Sin embargo, el Tribunal Supremo establece lámites para evitar querellas con fines puramente de desgaste político que no aporten indicios de pruebas materiales autónomas.</p>
+      `
+    },
+    {
+      title: '4. El Bulo de la "Subvención de 56.000€" en el BOE',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La desinformación recurrente sobre una ayuda millonaria de la que se hizo eco Alvise Párez:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>La publicación del BOE correspondáa a una subvención otorgada por el Ministerio de Empleo a una empresaria autónoma cántabra que comparte exactamente el mismo nombre y primer apellido: <strong>Begoña Gómez Gómez</strong>.</li>
+          <li>La base de datos nacional de subvenciones confirmí el error de homonimia y que la mujer del presidente no ha recibido ninguna ayuda directa del Gobierno.</li>
+        </ul>
+      `
+    }
+  ],
+  'investigacion-judicial-david-sanchez': [
+    {
+      title: '1. Residencia Fiscal Transfronteriza (Convenio España-Portugal)',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La tributación transfronteriza está sujeta a reglas fiscales estrictas de residencia efectiva:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>Para residir fiscalmente en Portugal y no tributar en España por el IRPF mundial, se debe permanecer en territorio portugués más de 183 días durante el año natural o tener allá el nácleo principal de actividades económicas.</li>
+          <li>La proximidad de municipios fronterizos como Elvas y Badajoz genera una inspección rigurosa por parte de la Agencia Tributaria para descartar residencias ficticias con fines exclusivos de ahorro de impuestos.</li>
+        </ul>
+      `
+    },
+    {
+      title: '2. Contratos de Alta Dirección en Administraciones públicas (RD 1382/1985)',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La contratación de David Sánchez en la Diputación de Badajoz se rige por el marco laboral especial:</p>
+        <p style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.45;">Los puestos de alta dirección en entes provinciales son puestos de confianza exentos de los exámenes ordinarios de funcionario de carrera, pero exigen acreditar capacidad tácnica, titulación habilitante y el cumplimiento efectivo de la jornada o de los objetivos del cargo encomendado.</p>
+      `
+    },
+    {
+      title: '3. El Bulo del "Patrimonio de 2 Millones sin Justificar"',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">El origen de los bienes y fondos declarados ante la Diputación de Badajoz:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>La declaración de bienes obligatoria incluye inmuebles recibidos como herencia familiar legátima documentada y acciones de empresas.</li>
+          <li>El saldo en cuentas bancarias corresponde en gran parte a los ingresos profesionales obtenidos durante su carrera internacional como director de orquesta en teatros de ápera extranjeros (Rusia, Japán) antes de asumir el puesto público.</li>
+        </ul>
+      `
+    }
+  ],
+  'empleo-y-cifras-de-paro': [
+    {
+      title: '1. Los Fijos Discontinuos en el Cómputo de Desempleo',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">El debate sobre los fijos discontinuos en el paro registrado del SEPE:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>Un trabajador con contrato fijo discontinuo en su periodo de inactividad estacional no se cuenta como parado registrado, sino como demandante de empleo con relación laboral.</li>
+          <li>Este criterio administrativo fue establecido por la <strong>Orden Ministerial de 11 de marzo de 1985</strong> y se mantiene inalterado tras la reforma laboral de 2021.</li>
+        </ul>
+      `
+    },
+    {
+      title: '2. EPA (INE) frente a Paro Registrado (SEPE)',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">Son dos metodologías diferentes para medir la salud del mercado laboral:</p>
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 0.5rem; text-align: left;">
+          <thead>
+            <tr style="border-bottom: 2px solid rgba(0, 240, 255, 0.25);">
+              <th style="padding: 0.3rem;">Mátodo</th>
+              <th style="padding: 0.3rem;">EPA (INE)</th>
+              <th style="padding: 0.3rem;">Paro Registrado (SEPE)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <td style="padding: 0.3rem; font-weight: bold;">Técnica</td>
+              <td style="padding: 0.3rem;">Encuesta a 65.000 hogares</td>
+              <td style="padding: 0.3rem;">Registros de oficinas de empleo</td>
+            </tr>
+            <tr>
+              <td style="padding: 0.3rem; font-weight: bold;">Validez</td>
+              <td style="padding: 0.3rem; color: var(--neon-green);">Homologada por la Oficina Estadástica de la UE</td>
+              <td style="padding: 0.3rem; color: var(--neon-amber);">Condicionada a la inscripción activa obligatoria</td>
+            </tr>
+          </tbody>
+        </table>
+      `
+    },
+    {
+      title: '3. El Bulo del "Maquillaje de Paro" con Cursos de Formación',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La clasificación de demandantes no ocupados en formación (DENOS):</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>Los desempleados apuntados a cursos de formación reglados por el SEPE pasan al estado DENO de forma temporal.</li>
+          <li>Esta distinción estadástica sigue directivas comunitarias idánticas de Eurostat aplicadas en toda la UE para diferenciar a los desempleados disponibles de inmediato para trabajar de aquellos en procesos formativos obligatorios.</li>
+        </ul>
+      `
+    }
+  ],
+  'autonomos-y-fiscalidad': [
+    {
+      title: '1. El RETA y la Cotización por Ingresos Reales',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">El sistema aprobado por el Real Decreto-ley 13/2022 reforma la base de cotización de autónomos:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>Los autónomos eligen su base de cotización mensual en función de sus rendimientos netos anuales previstos.</li>
+          <li>Al cierre del año, la Seguridad Social regulariza las cuotas cruzando datos con el IRPF de la Agencia Tributaria. Si cotizí de menos se le reclama la diferencia; si cotizí de más se le devuelve de oficio.</li>
+        </ul>
+      `
+    },
+    {
+      title: '2. Estimación Directa y Gastos Deducibles',
+      text: '',
+      htmlContent: `
+        <p style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.45;">Se restan de los ingresos brutos los gastos de explotación justificados mediante facturas. Se permite deducir un 7% de gastos de difácil justificación (5% para autónomos societarios) sobre la diferencia con un lámite de 2.000 euros anuales.</p>
+      `
+    },
+    {
+      title: '3. Comparativa Europea de Cuotas de Autánomos',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">Es falso que la cuota mínima de España sea la mayor de la UE en tárminos absolutos de cobertura:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>En países como Alemania o Francia no hay una cuota única fija baja, sino que los autónomos pagan seguros médicos privados obligatorios y pensiones por separado, sumando a menudo más del 30% de sus ingresos netos.</li>
+          <li>La cuota mínima de España (RETA) incluye de forma directa cobertura de baja por enfermedad, accidente laboral y cese de actividad en un único pago integrado.</li>
+        </ul>
+      `
+    }
+  ],
+  'impuestos-y-ahorro': [
+    {
+      title: '1. Impuesto sobre el Patrimonio vs Grandes Fortunas',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La tributación sobre la riqueza acumulada en España:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>El Impuesto de Patrimonio está cedido a las CCAA, algunas de las cuales lo bonificaban al 100% (Madrid, Andalucáa).</li>
+          <li>Para evitar el vaciado fiscal, la Ley 38/2022 introdujo el Impuesto de Solidaridad de las Grandes Fortunas como un gravamen estatal de control sobre patrimonios netos superiores a 3 millones de euros.</li>
+        </ul>
+      `
+    },
+    {
+      title: '2. Tipos de Impuestos y Capacidad económica',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La Constitución establece el mandato del sistema tributario en el artículo 31.1:</p>
+        <blockquote style="border-left: 3px solid var(--neon-blue); padding-left: 0.75rem; margin: 0.5rem 0; font-style: italic; font-size: 0.82rem; color: var(--text-muted);">
+          "Todos contribuirán al sostenimiento de los gastos públicos de acuerdo con su capacidad económica mediante un sistema tributario justo inspirado en los principios de igualdad y progresividad..."
+        </blockquote>
+      `
+    },
+    {
+      title: '3. El Bulo del "Impuesto del 50%" para la Clase Media',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">Las escalas del IRPF son progresivas y por tramos, no de tipo único:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>El tipo marginal máximo del 45-47% solo se aplica sobre la parte de la renta anual que **exceda los 300.000 euros**.</li>
+          <li>Una renta media de 24.000€ tributa a un tipo efectivo medio de aproximadamente el 15%, muy alejado de los supuestos tipos del 40-50% viralizados en redes.</li>
+        </ul>
+      `
+    }
+  ],
+  'seguridad-obras-publicas': [
+    {
+      title: '1. El Bulo de la "Destrucción de Presas en Sequáa"',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La eliminación de barreras fluviales responde a normativas ecológicas europeas:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>Las obras demolidas son azudes, pequeáas compuertas en desuso o barreras obsoletas que ya no cumpláan ninguna función de abastecimiento o riego.</li>
+          <li>Ningán gran embalse de agua para consumo humano o generación hidroeláctrica operativa ha sido demolido en España. Las actuaciones buscan recuperar el flujo biolágico de los ráos siguiendo la directiva europea de aguas.</li>
+        </ul>
+      `
+    },
+    {
+      title: '2. Seguridad Estructural y Vigilancia de Presas',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">El control sistemático de las infraestructuras hidráulicas en España:</p>
+        <p style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.45;">Las confederaciones hidrográficas y el Ministerio para la Transición Ecológica realizan mediciones de movimiento de tierras, presión de agua y mantenimiento preventivo continuo de presas mediante sensores de oscilación láser de alta precisión.</p>
+      `
+    },
+    {
+      title: '3. Inversión y Conservación de Carreteras',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">Las partidas del presupuesto del Estado asignadas al mantenimiento de viales:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem;">
+          <li>El Ministerio de Transportes destina anualmente más de 1.200 millones de euros a la conservación ordinaria de la Red de Carreteras del Estado.</li>
+          <li>Los bulos que alertan de "peajes automáticos obligatorios por párticos" en todas las autováas a partir de 2024 carecen de marco legal aprobado.</li>
+        </ul>
+      `
+    }
+  ],
+  'economia-espanola': [
+    {
+      title: '1. Medición de Crecimiento económico (PIB)',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">El PIB mide el valor monetario de todos los bienes y servicios producidos en España:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>Publicado trimestralmente por el INE en la Contabilidad Nacional Trimestral de España.</li>
+          <li>El sector servicios (incluyendo turismo) aporta más del 67% del valor aáadido bruto del PIB español.</li>
+        </ul>
+      `
+    },
+    {
+      title: '2. Deuda pública y Protocolo de Dáficit Excesivo',
+      text: '',
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La deuda de las administraciones públicas se rige por las reglas fiscales del Tratado de Maastricht:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem;">
+          <li>Lámite de dáficit anual del 3% del PIB y deuda del 60% del PIB, actualmente reactivados tras la suspensión por la pandemia.</li>
+          <li>El Banco de España publica la cifra oficial de deuda según el PDE mensualmente.</li>
+        </ul>
+      `
+    }
+  ],
+  'franquismo-y-memoria-historica': [
+    { 
+      title: '1. Origen de la Seguridad Social y Pensiones (El INP vs Ley 1963)', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">Es un debate recurrente atribuir la creación de la Seguridad Social y el sistema de pensiones en exclusiva a la dictadura franquista. El desglose histórico oficial demuestra una evolución legislativa por etapas:</p>
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 0.5rem; margin-bottom: 0.5rem; text-align: left;">
+          <thead>
+            <tr style="border-bottom: 2px solid rgba(0, 240, 255, 0.25);">
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Hito Historico</th>
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Año y Normativa</th>
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Aportación Real al Sistema</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <td style="padding: 0.4rem; font-weight: bold;">Instituto Nacional de Previsión (INP)</td>
+              <td style="padding: 0.4rem;">1908 (Alfonso XIII / Maura)</td>
+              <td style="padding: 0.4rem;">Primer árgano público para gestionar seguros sociales voluntarios y el Retiro Obrero (1919) obligatorio.</td>
+            </tr>
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <td style="padding: 0.4rem; font-weight: bold;">Seguro Obligatorio de Enfermedad (SOE)</td>
+              <td style="padding: 0.4rem;">1942 (Dictadura)</td>
+              <td style="padding: 0.4rem;">Implantación del seguro de salud para trabajadores de rentas bajas. La paga extra se formaliza en 1944.</td>
+            </tr>
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <td style="padding: 0.4rem; font-weight: bold;">Ley de Bases de la Seguridad Social</td>
+              <td style="padding: 0.4rem;">1963 (Dictadura)</td>
+              <td style="padding: 0.4rem;">Unificación de los máltiples montes de piedad y seguros sectoriales en un único sistema unificado.</td>
+            </tr>
+            <tr>
+              <td style="padding: 0.4rem; font-weight: bold;">Constitución Española (Art. 41 y 50)</td>
+              <td style="padding: 0.4rem; color: var(--neon-green);">1978 (Democracia)</td>
+              <td style="padding: 0.4rem;">Consolidación del sistema público de reparto moderno, revalorización obligatoria y universalización de la asistencia.</td>
+            </tr>
+          </tbody>
+        </table>
+      ` 
+    },
+    { 
+      title: '2. Desaparecidos y Presupuestos de Exhumación (Ley 20/2022)', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La preocupación de las familias de los desaparecidos y el coste de las exhumaciones es uno de los temas más polarizados:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem;">
+          <li><strong>Dimensión</strong>: Segán el Auto de la Audiencia Nacional de 2008 y estimaciones de la plataforma de víctimas, existen más de <strong>114.000 desaparecidos</strong> de la Guerra Civil y la Dictadura enterrados en fosas.</li>
+          <li><strong>Obligación Estatal</strong>: El artículo 16 de la Ley 20/2022 delega en la Administración General del Estado la responsabilidad de la búsqueda y localización de las víctimas.</li>
+        </ul>
+      ` 
+    }
+  ],
+  'corrupcion-y-promesas-politicas': [
+    { 
+      title: '1. El Cohecho y las Comisiones de Mascarillas', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La instrucción del caso investiga presuntos delitos de organización criminal, cohecho y tráfico de influencias en la adjudicación de contratos de emergencia de mascarillas:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li><strong>Importe adjudicado</strong>: Adjudicaciones directas que superan los 53 millones de euros a la empresa Soluciones de Gestián.</li>
+          <li><strong>Comisiones</strong>: Se investiga si asesores públicos cobraron comisiones en metálico o en forma de inmuebles a cambio de facilitar la contratación express.</li>
+        </ul>
+      ` 
+    },
+    { 
+      title: '2. Contratos de Emergencia (Art. 120 LCSP)', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La Ley de Contratos del Sector público (LCSP) regula la contratación sin licitación previa en crisis:</p>
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 0.5rem; margin-bottom: 0.5rem; text-align: left;">
+          <thead>
+            <tr style="border-bottom: 2px solid rgba(0, 240, 255, 0.25);">
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Procedimiento</th>
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Ordinario</th>
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Emergencia (Pandemia)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <td style="padding: 0.4rem; font-weight: bold;">Licitación</td>
+              <td style="padding: 0.4rem;">pública, con ofertas de máltiples empresas</td>
+              <td style="padding: 0.4rem; color: var(--neon-green);">Adjudicación directa, sin concurrencia</td>
+            </tr>
+            <tr>
+              <td style="padding: 0.4rem; font-weight: bold;">Fiscalización</td>
+              <td style="padding: 0.4rem;">Previa a la firma del contrato</td>
+              <td style="padding: 0.4rem; color: var(--neon-rose);">Posterior al inicio de la ejecución</td>
+            </tr>
+          </tbody>
+        </table>
+      ` 
+    }
+  ],
+  'sanidad-publica': [
+    { 
+      title: '1. Listas de Espera Quirúrgicas (SISLE)', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">Segán el Sistema de Información de Listas de Espera del Ministerio de Sanidad (SISLE):</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>Rácord histórico nacional de más de <strong>849.000 pacientes esperando una intervención quirúrgica</strong> no urgente.</li>
+          <li>El tiempo medio de espera en España se sitáa en <strong>128 días</strong>.</li>
+          <li>más del 24% de los pacientes en listas de espera superan el plazo máximo de 6 meses.</li>
+        </ul>
+      ` 
+    },
+    { 
+      title: '2. Desglose del Gasto Sanitario público vs Privado', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">El gasto total en sanidad en España ronda el 10.9% del PIB:</p>
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 0.5rem; margin-bottom: 0.5rem; text-align: left;">
+          <thead>
+            <tr style="border-bottom: 2px solid rgba(0, 240, 255, 0.25);">
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Proveedor</th>
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Financiación (% PIB)</th>
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Rol en el Sistema</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <td style="padding: 0.4rem; font-weight: bold;">Gasto público</td>
+              <td style="padding: 0.4rem;">7.8% del PIB</td>
+              <td style="padding: 0.4rem;">Financia la red de hospitales de la Seguridad Social y centros de atención primaria.</td>
+            </tr>
+            <tr>
+              <td style="padding: 0.4rem; font-weight: bold;">Gasto Privado</td>
+              <td style="padding: 0.4rem; color: var(--neon-amber);">3.1% del PIB (29.2% del total)</td>
+              <td style="padding: 0.4rem;">Seguros privados voluntarios, copagos de farmacia y servicios dentales/ápticos no cubiertos.</td>
+            </tr>
+          </tbody>
+        </table>
+      ` 
+    }
+  ],
+  'justicia-imputado-condenado': [
+    { 
+      title: '1. Investigado vs Imputado (Reforma de la LECrim)', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La reforma del artículo 324 de la Ley de Enjuiciamiento Criminal de 2015 sustituyí formalmente el tármino judicial:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li><strong>Investigado</strong>: Persona sobre la que existen indicios de criminalidad y que declara con asistencia letrada, sin que suponga una imputación de cargos en firme.</li>
+          <li><strong>Encausado</strong>: Fase posterior donde el juez formula una acusación formal en el auto de transformación de diligencias previas.</li>
+          <li><strong>Condenado</strong>: únicamente la persona sobre la que ha recaádo una sentencia firme dictada tras el juicio oral con contradicción.</li>
+        </ul>
+      ` 
+    },
+    { 
+      title: '2. La Presunción de Inocencia (Art. 24.2 CE)', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">Es el principio garantista fundamental de toda la arquitectura del sistema procesal español:</p>
+        <blockquote style="border-left: 3px solid var(--neon-blue); padding-left: 0.75rem; margin: 0.5rem 0; font-style: italic; font-size: 0.82rem; color: var(--text-muted);">
+          "Todos tienen derecho al Juez ordinario predeterminado por la ley, a la defensa y a la asistencia de letrado... y a la presunción de inocencia." (Constitución Española, Art. 24.2)
+        </blockquote>
+      ` 
+    }
+  ],
+  'consumo-viral-productos-milagro': [
+    { 
+      title: '1. Regulación de Productos Milagro (RD 1907/1996)', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La legislación prohíbe atribuir propiedades preventivas o terapéuticas a alimentos o cosméticos:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>Estí prohibido sugerir que un complemento alimenticio (detox, colágeno) cura enfermedades o tiene efectos adelgazantes milagrosos sin aval clúnico oficial.</li>
+          <li>La Agencia Española de Medicamentos y Productos Sanitarios (AEMPS) publica periádicamente las alertas de retirada del mercado.</li>
+        </ul>
+      ` 
+    },
+    { 
+      title: '2. Publicidad Encubierta de Influencers', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La Ley General de Comunicación Audiovisual obliga a marcar con claridad el contenido patrocinado:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem;">
+          <li>Las menciones a marcas con enlaces de afiliados deben acompaáarse de las etiquetas <strong>#Publi</strong> o <strong>#Patrocinado</strong> de forma visible.</li>
+          <li>La CNMC impone multas severas a creadores de contenido que oculten la relación comercial detrás de sus recomendaciones.</li>
+        </ul>
+      ` 
+    }
+  ],
+  'ciberestafas-y-dinero-facil': [
+    { 
+      title: '1. Phishing y Responsabilidad Bancaria (Ley PSD2)', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La Directiva Europea de Servicios de Pago (PSD2) regula la suplantación de identidad:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>Si el cliente sufre una sustracción de fondos tras phishing, el banco está obligado a devolver el dinero inmediatamente de oficio.</li>
+          <li>El banco solo se exime de la devolución si demuestra una <strong>negligencia grave</strong> por parte del titular (por ejemplo, revelar el código PIN o el SMS dinámico de transferencia).</li>
+        </ul>
+      ` 
+    },
+    { 
+      title: '2. Chiringuitos Financieros y CNMV', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">Las estafas de inversión basadas en el "dinero fácil" o robots de trading automáticos:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem;">
+          <li>Las entidades que capten fondos del público en España deben figurar en el registro de la Comisión Nacional del Mercado de Valores (CNMV).</li>
+          <li>Los llamados "chiringuitos financieros" operan sin autorización del regulador y suelen constituir fraudes piramidales (esquema Ponzi).</li>
+        </ul>
+      ` 
+    }
+  ],
+  'cataluna-y-convivencia-territorial': [
+    { 
+      title: '1. Ley de Amnistía (LO 1/2024)', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">La ley extingue la responsabilidad penal, administrativa y contable por los actos vinculados al procés:</p>
+        <ul style="padding-left: 1.25rem; margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <li>Abarca las consultas y movilizaciones realizadas entre el 1 de enero de 2011 y el 13 de noviembre de 2023.</li>
+          <li>Excluye de forma expresa los delitos de traición que afecten a la soberanía del Estado y el terrorismo severo.</li>
+        </ul>
+      ` 
+    },
+    { 
+      title: '2. Financiación Singular vs Régimen Comán', 
+      text: '', 
+      htmlContent: `
+        <p style="margin-bottom: 0.5rem;">El debate territorial sobre la Hacienda propia de Cataluáa en comparación con el Cupo Vasco:</p>
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 0.5rem; margin-bottom: 0.5rem; text-align: left;">
+          <thead>
+            <tr style="border-bottom: 2px solid rgba(0, 240, 255, 0.25);">
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Caracterástica</th>
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Concierto Vasco (Foral)</th>
+              <th style="padding: 0.4rem; color: var(--neon-blue);">Régimen Comán LOFCA (Propuesta)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <td style="padding: 0.4rem; font-weight: bold;">Recaudación</td>
+              <td style="padding: 0.4rem;">100% de impuestos por la hacienda foral propia</td>
+              <td style="padding: 0.4rem;">Reparto centralizado mediante fondos de suficiencia</td>
+            </tr>
+            <tr>
+              <td style="padding: 0.4rem; font-weight: bold;">Solidaridad</td>
+              <td style="padding: 0.4rem; color: var(--neon-green);">Aportación del Cupo por competencias del Estado</td>
+              <td style="padding: 0.4rem; color: var(--neon-rose);">Sujeto a nivelación territorial obligatoria</td>
+            </tr>
+          </tbody>
+        </table>
+      ` 
+    }
+  ]
+};
+
+const defaultCards = [
+  { title: '1. Marco Legal Vigente', text: 'Toda regulación en España parte de la Constitución Española y se desarrolla mediante Leyes Orgúnicas y Ordinarias publicadas en el BOE.' },
+  { title: '2. Acceso a Datos públicos', text: 'La Ley de Transparencia de España permite consultar resoluciones oficiales, presupuestos y contratos del sector público.' },
+  { title: '3. Verificación de Fuentes', text: 'Antes de compartir información, contrasta con agencias acreditadas, el BOE o estadísticas de organismos del Estado (INE).' }
+];
+
+const cards = educationalCards[slug] || defaultCards;
+
+const infographicData = {
+  'vivienda-y-okupacion': {
+    metric: '98.5%',
+    metricLabel: 'Casos resueltos como allanamiento inmediato',
+    subText: 'Los casos de okupación en primera y segunda vivienda se tipifican penalmente como allanamiento de morada, lo que faculta a las fuerzas policiales para actuar de forma inmediata sin necesidad de orden judicial.',
+    bars: [
+      { label: 'Desalojos de Morada (Allanamiento)', percentage: '100%', color: 'var(--neon-green)', desc: 'Desalojo directo e inmediato' },
+      { label: 'Casos en Juicio (Usurpación de locales vacíos)', percentage: '1.5%', color: 'var(--neon-rose)', desc: 'Requiere instrucción judicial previa' }
+    ]
+  },
+  'inmigracion-y-convivencia': {
+    metric: '2.8M',
+    metricLabel: 'Trabajadores extranjeros afiliados a la Seguridad Social',
+    subText: 'Las cotizaciones de los afiliados extranjeros representan el 13,4% de los ingresos totales del sistema de pensiones en España, equilibrando la tasa de dependencia de la población envejecida.',
+    bars: [
+      { label: 'Afiliados Extranjeros a la SS', percentage: '13.4%', color: 'var(--neon-blue)', desc: '2.800.000 cotizantes jóvenes' },
+      { label: 'Gasto en IMV asignado a extranjeros', percentage: '8.2%', color: 'var(--neon-purple)', desc: 'Requiere residencia legal de más de 1 año' }
+    ]
+  },
+  'economia-espanola': {
+    metric: '2.5%',
+    metricLabel: 'Crecimiento estimado del PIB real interanual',
+    subText: 'El dinamismo de la economáa española durante el áltimo año se sitáa por encima de la media de crecimiento de la Eurozona, liderado por el sector servicios, exportaciones y empleo.',
+    bars: [
+      { label: 'Deuda pública sobre el PIB', percentage: '107%', color: 'var(--neon-rose)', desc: 'Ratio de deuda financiera del PDE' },
+      { label: 'Dáficit Fiscal del Estado', percentage: '3.6%', color: 'var(--neon-amber)', desc: 'Diferencia anual de ingresos/gastos' }
+    ]
+  },
+  'franquismo-y-memoria-historica': {
+    metric: '114K',
+    metricLabel: 'Váctimas estimadas desaparecidas en fosas comunes',
+    subText: 'España es el segundo país del mundo con mayor námero de desaparecidos de los que no se conoce el paradero, solo superado por Camboya. La ley estatal asume su exhumación pública.',
+    bars: [
+      { label: 'búsqueda financiada por el Estado', percentage: '100%', color: 'var(--neon-blue)', desc: 'Asumido por la Ley 20/2022' },
+      { label: 'Exhumaciones completadas', percentage: '25%', color: 'var(--neon-amber)', desc: 'En fase de análisis genático y forense' }
+    ]
+  },
+  'corrupcion-y-promesas-politicas': {
+    metric: '53M',
+    metricLabel: 'Euros en contratos de emergencia de mascarillas bajo sospecha',
+    subText: 'Se investiga el cobro de comisiones y mordidas ilegales a asesores públicos en compras centralizadas de material de protección durante los meses de mayor incidencia de la pandemia.',
+    bars: [
+      { label: 'Contratos Adjudicados Directamente', percentage: '100%', color: 'var(--neon-rose)', desc: 'Contratación de emergencia (Sin publicidad)' },
+      { label: 'Porcentaje de comisión investigada', percentage: '15%', color: 'var(--neon-amber)', desc: 'Presunto cohecho y desváo de fondos' }
+    ]
+  },
+  'sanidad-publica': {
+    metric: '849K',
+    metricLabel: 'Pacientes en listas de espera quirúrgica en España',
+    subText: 'Las listas de espera no urgentes de la Seguridad Social baten rácords históricos de saturación. La media de espera supera los 4 meses.',
+    bars: [
+      { label: 'Espera media quirúrgica (días)', percentage: '100%', color: 'var(--neon-rose)', desc: '128 días de espera de media' },
+      { label: 'Pacientes con más de 6 meses de espera', percentage: '24.3%', color: 'var(--neon-amber)', desc: '24.3% del total nacional en lista' }
+    ]
+  },
+  'justicia-imputado-condenado': {
+    metric: '0',
+    metricLabel: 'Indicios delictivos confirmados por la UCO en el caso Begoña',
+    subText: 'La presunción de inocencia exige que las acusaciones populares acrediten los indicios penales antes de la apertura de juicio por el magistrado instructor.',
+    bars: [
+      { label: 'Presunción de inocencia garantizada', percentage: '100%', color: 'var(--neon-green)', desc: 'Art. 24.2 de la Constitución Española' },
+      { label: 'Fase procesal actual (Diligencias previas)', percentage: '50%', color: 'var(--neon-blue)', desc: 'Instrucción judicial de evidencias' }
+    ]
+  },
+  'consumo-viral-productos-milagro': {
+    metric: '100%',
+    metricLabel: 'Menciones promocionales obligadas a marcarse como #Publi',
+    subText: 'Los creadores de contenido deben declarar cualquier colaboración pagada y eludir claims terapáuticos fraudulentos en cosméticos o dietática.',
+    bars: [
+      { label: 'Alertas AEMPS por productos sin aval', percentage: '45%', color: 'var(--neon-rose)', desc: 'Retiradas de complementos milagrosos' },
+      { label: 'Cumplimiento de etiquetado en RRSS', percentage: '30%', color: 'var(--neon-amber)', desc: '70% incumple la norma de transparencia' }
+    ]
+  },
+  'ciberestafas-y-dinero-facil': {
+    metric: '100%',
+    metricLabel: 'Reembolso obligado al cliente víctima de phishing sin culpa',
+    subText: 'Bajo la Directiva de Pago PSD2, el banco debe reembolsar el capital transferido fraudulentamente salvo negligencia grave demostrada del cliente.',
+    bars: [
+      { label: 'Devoluciones inmediatas resueltas', percentage: '88%', color: 'var(--neon-green)', desc: 'Sustracciones por smishing y phishing' },
+      { label: 'Alertas activas de la CNMV por chiringuitos', percentage: '100%', color: 'var(--neon-rose)', desc: 'Operadores sin registro oficial' }
+    ]
+  },
+  'cataluna-y-convivencia-territorial': {
+    metric: '486',
+    metricLabel: 'Personas beneficiadas potencialmente por la Amnistía',
+    subText: 'La Amnistía del procés ampara los cargos y movilizaciones del independentismo catalán. La malversación con desváo directo personal está excluida.',
+    bars: [
+      { label: 'Causas paralizadas provisionalmente', percentage: '100%', color: 'var(--neon-purple)', desc: 'Pendiente de resolución ante el TJUE' },
+      { label: 'Efectividad en causas sin malversación', percentage: '100%', color: 'var(--neon-green)', desc: 'Desárdenes públicos amnistiados' }
+    ]
+  },
+  'caso-begona-gomez': {
+    metric: '0',
+    metricLabel: 'Imputaciones en firme de desváo patrimonial directo',
+    subText: 'La instrucción penal del juzgado ní 41 de Madrid recaba declaraciones testificales e informes de la Guardia Civil para valorar indicios.',
+    bars: [
+      { label: 'Indicios delictivos acreditados por la UCO', percentage: '0%', color: 'var(--neon-green)', desc: 'El informe policial descarta irregularidades firmes' },
+      { label: 'Fase procesal actual (Diligencias previas)', percentage: '100%', color: 'var(--neon-blue)', desc: 'Instrucción preliminar por querella' }
+    ]
+  },
+  'investigacion-judicial-david-sanchez': {
+    metric: '183',
+    metricLabel: 'Días de permanencia en el extranjero obligatorios por ley',
+    subText: 'Se investiga judicialmente si el hermano de Pedro Sánchez reside efectivamente en Elvas (Portugal) o si debií tributar el IRPF en territorio nacional.',
+    bars: [
+      { label: 'Inspecciones tributarias iniciadas', percentage: '100%', color: 'var(--neon-rose)', desc: 'Petición de correos y expedientes de vida laboral' },
+      { label: 'Pruebas concluyentes de enriquecimiento', percentage: '0%', color: 'var(--neon-green)', desc: 'No se han hallado cuentas o bienes ocultos' }
+    ]
+  },
+  'inflacion-y-coste-de-vida': {
+    metric: '2.0%',
+    metricLabel: 'Objetivo de estabilidad de precios a medio plazo del BCE',
+    subText: 'La política monetaria unificada europea busca estabilizar el incremento de precios de la cesta mediante el control de los tipos de interés.',
+    bars: [
+      { label: 'Encarecimiento acumulado de alimentos (2022-2024)', percentage: '25%', color: 'var(--neon-rose)', desc: 'Subida media en supermercados de España' },
+      { label: 'Rebaja del IVA de alimentos básicos (Medidas)', percentage: '100%', color: 'var(--neon-green)', desc: 'Aplicación del 0% al aceite y pan' }
+    ]
+  },
+  'empleo-y-cifras-de-paro': {
+    metric: '11.2%',
+    metricLabel: 'Tasa de desempleo estructural calculada por el INE (EPA)',
+    subText: 'La Encuesta de Población Activa mide el paro a travás de encuestas trimestrales en hogares, homologada bajo criterios directivos de Eurostat.',
+    bars: [
+      { label: 'Fijos discontinuos inactivos con empleo legal', percentage: '100%', color: 'var(--neon-blue)', desc: 'Excluidos del paro registrado por orden de 1985' },
+      { label: 'Tasa de paro juvenil en España', percentage: '26.5%', color: 'var(--neon-rose)', desc: 'Desempleados menores de 25 años activos' }
+    ]
+  },
+  'autonomos-y-fiscalidad': {
+    metric: '15',
+    metricLabel: 'Tramos oficiales de rendimientos netos en el RETA',
+    subText: 'El nuevo sistema grava de forma progresiva según las ganancias reales del trabajador por cuenta propia declaradas a la Agencia Tributaria.',
+    bars: [
+      { label: 'Regularización de cuotas a año vencido', percentage: '100%', color: 'var(--neon-amber)', desc: 'Cruce anual RETA y Declaración de la Renta' },
+      { label: 'Tarifa plana aplicable en el primer año', percentage: '80%', color: 'var(--neon-green)', desc: 'Cuota fija mensual de 80€ en el inicio' }
+    ]
+  },
+  'impuestos-y-ahorro': {
+    metric: '30%',
+    metricLabel: 'Aportación media del IRPF al total recaudado por el Estado',
+    subText: 'El Impuesto sobre la Renta de las Personas Fásicas constituye la columna vertebral de los ingresos tributarios en el presupuesto anual.',
+    bars: [
+      { label: 'Exención del Impuesto Grandes Fortunas (Euros)', percentage: '100%', color: 'var(--neon-blue)', desc: 'Mínimo exento de 3 millones de euros netos' },
+      { label: 'Cesión autónoma de tributos (Patrimonio)', percentage: '50%', color: 'var(--neon-purple)', desc: 'Tarifas y bonificaciones de las CCAA' }
+    ]
+  },
+  'politica-y-leyes': {
+    metric: '176',
+    metricLabel: 'Votos necesarios para mayoría absoluta en el Congreso',
+    subText: 'La convalidación de Reales Decretos-leyes ordinarios y la aprobación de Leyes Orgúnicas exigen cuotas y apoyos parlamentarios estrictos.',
+    bars: [
+      { label: 'Plazo de convalidación de Decreto-ley (Días)', percentage: '100%', color: 'var(--neon-amber)', desc: '30 días naturales para ratificar la norma' },
+      { label: 'Recursos ante el Tribunal Constitucional', percentage: '25%', color: 'var(--neon-rose)', desc: 'Leyes recurridas por inconstitucionalidad' }
+    ]
+  },
+  'menores-extranjeros-no-acompanados': {
+    metric: '100%',
+    metricLabel: 'Competencia exclusiva de tutela de las Comunidades Autónomas',
+    subText: 'Los menores extranjeros no acompañados se integran obligatoriamente bajo los sistemas autonómicos de protección a la infancia por ley.',
+    bars: [
+      { label: 'Tutela legal asumida por la CCAA receptora', percentage: '100%', color: 'var(--neon-purple)', desc: 'Art. 172 del Código Civil de desamparo' },
+      { label: 'Porcentaje de reparto solidario no obligatorio', percentage: '95%', color: 'var(--neon-amber)', desc: 'Falta de reforma del Art. 35 Ley Extranjeráa' }
+    ]
+  }
+};
+
+const info = infographicData[slug];
+const didactic = topicDidacticData[slug];
+const base = import.meta.env.BASE_URL;
+const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base;
+const getLink = (p) => {
+  const pathClean = p.startsWith('/') ? p : '/' + p;
+  return `${cleanBase}${pathClean}`;
+};
+
+
+export async function getStaticPaths() {
+  const db = getDatabase();
+  const topics = db.prepare("SELECT slug FROM topics WHERE status = 'activo'").all();
+  return topics.map(t => ({
+    params: { slug: t.slug }
+  }));
+}
+---
+
+<Layout title={topic.title} description={topic.description}>
+  <div class="container" style="padding-top: 1.5rem; padding-bottom: 3rem; max-width: 680px;">
+    
+    <!-- Breadcrumbs -->
+    <nav style="display: flex; gap: 0.5rem; align-items: center; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 1.5rem; font-family: var(--font-title);">
+      <a href={getLink('/')} style="color: var(--text-muted); text-decoration: none; transition: color 0.2s;">Inicio</a>
+      <span>/</span>
+      {topic.theme_slug && (
+        <>
+          <a href={getLink(`/seccion/${topic.theme_slug}`)} style="color: var(--text-muted); text-decoration: none; transition: color 0.2s;">{topic.theme_name}</a>
+          <span>/</span>
+        </>
+      )}
+      <span style="color: var(--neon-blue); font-weight: bold;">{topic.title}</span>
+    </nav>
+
+    <!-- ? HERO DEL TEMA ? -->
+    <section class="topic-hero" style="margin-bottom: 2rem;">
+      <div class="cyber-card" style="padding: 2.5rem 2rem; background: linear-gradient(180deg, rgba(18, 22, 41, 0.8) 0%, rgba(7, 9, 19, 0.95) 100%); overflow: hidden; border-color: rgba(0, 240, 255, 0.25);">
+        
+        <!-- Background Glow -->
+        <div style="position: absolute; top: -50px; right: -50px; width: 150px; height: 150px; background: var(--neon-blue); filter: blur(80px); opacity: 0.15; pointer-events: none;"></div>
+
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; position: relative; z-index: 2;">
+          <span style="background: rgba(0, 240, 255, 0.06); color: var(--neon-blue); font-size: 0.65rem; font-weight: 800; padding: 0.35rem 0.85rem; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.08em; border: 1px solid rgba(0, 240, 255, 0.15);">
+            Expediente: {topic.category}
+          </span>
+          <span style="color: var(--neon-green); font-weight: 800; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em; display: inline-flex; align-items: center; gap: 0.4rem;">
+            <span class="pulse-icon" style="margin-right: 0;"></span>
+            Seguimiento Activo
+          </span>
+        </div>
+
+        <h1 style="font-size: 2.4rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1.15; margin-bottom: 1rem; color: var(--text-main); font-family: var(--font-title); position: relative; z-index: 2;">
+          {topic.title}
+        </h1>
+
+        <p style="font-size: 1.05rem; color: var(--text-muted); line-height: 1.6; margin-bottom: 2rem; max-width: 580px; position: relative; z-index: 2;">
+          {topic.description}
+        </p>
+
+        <!-- Stat Cards Grid -->
+        {info && (
+          <div class="topic-stat-grid" style="position: relative; z-index: 2;">
+            <div class="topic-stat-card">
+              <div class="topic-stat-value" style="color: var(--neon-blue);">{info.metric}</div>
+              <div class="topic-stat-label">{info.metricLabel.split(' ').slice(0, 3).join(' ')}</div>
+            </div>
+            <div class="topic-stat-card">
+              <div class="topic-stat-value" style="color: var(--neon-purple);">{cards.length}</div>
+              <div class="topic-stat-label">Apartados Legales</div>
+            </div>
+            <div class="topic-stat-card">
+              <div class="topic-stat-value" style="color: var(--neon-green);">{articles.length}</div>
+              <div class="topic-stat-label">Desmentidos</div>
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+
+    <!-- ? BOTONES DE APARTADOS (TABS) ? -->
+    <nav class="topic-tabs-nav">
+      <button class="tab-btn active" data-target="panel-legal">
+         <span>Didáctica y Hechos</span>
+      </button>
+      <button class="tab-btn" data-target="panel-magnitud">
+         <span>Cifras y Datos</span>
+      </button>
+      <button class="tab-btn" data-target="panel-radar">
+         <span>Casos en el Radar ({articles.length})</span>
+      </button>
+      <button class="tab-btn" data-target="panel-politica">
+         <span>Enfoque Político ({policyMeasures.length})</span>
+      </button>
+    </nav>
+
+    <!-- ? PANEL 1: MAGNITUD Y CIFRAS ? -->
+    <div id="panel-magnitud" class="topic-tab-panel">
+      {info && (
+        <section class="topic-section">
+          <div class="topic-section-header">
+            <div class="topic-section-icon" style="background: rgba(0, 240, 255, 0.1); color: var(--neon-blue);"></div>
+            <h2 class="topic-section-title">Magnitud y Cifras Oficiales</h2>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 1.25rem;">
+            <!-- Métrica Detallada -->
+            <div style="background: linear-gradient(135deg, rgba(0, 240, 255, 0.03) 0%, rgba(7, 9, 19, 0.8) 100%); border: 1px solid rgba(0, 240, 255, 0.15); padding: 1.5rem; border-radius: 20px; text-align: center;">
+              <span style="font-size: 3.5rem; font-weight: 800; font-family: var(--font-title); color: var(--neon-blue); line-height: 1; display: block; margin-bottom: 0.25rem; text-shadow: 0 0 15px rgba(0, 240, 255, 0.2);">{info.metric}</span>
+              <span style="font-size: 0.8rem; font-weight: 700; color: var(--text-main); text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 0.75rem;">{info.metricLabel}</span>
+              <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; margin: 0; max-width: 550px; margin-left: auto; margin-right: auto;">{info.subText}</p>
+            </div>
+
+            <!-- Indicadores de barras -->
+            <div class="cyber-card" style="padding: 1.5rem; background: rgba(18, 22, 41, 0.45); display: flex; flex-direction: column; gap: 1.25rem;">
+              <strong style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); display: block; letter-spacing: 0.05em;">Indicadores y Contexto de Datos</strong>
+              {info.bars.map(bar => (
+                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                  <div style="display: flex; justify-content: space-between; font-size: 0.8rem;">
+                    <span style="color: var(--text-main); font-weight: 700;">{bar.label}</span>
+                    <strong style={`color: ${bar.color}`}>{bar.percentage}</strong>
+                  </div>
+                  <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.05); border-radius: 4px; overflow: hidden; border: 1px solid rgba(255,255,255,0.02);">
+                    <div style={`width: ${bar.percentage}; height: 100%; background: ${bar.color}; border-radius: 4px;`} class="topic-bar-fill"></div>
+                  </div>
+                  <span style="font-size: 0.7rem; color: var(--text-muted);">{bar.desc}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+    </div>
+
+    <!-- ? PANEL 2: MARCO LEGAL Y DIDáCTICA ? -->
+    <div id="panel-legal" class="topic-tab-panel active">
+      <!-- 1. ¿Qué está pasando? -->
+      {didactic && (
+        <section class="topic-section" style="margin-bottom: 2.5rem;">
+          <div class="topic-section-header">
+            <div class="topic-section-icon" style="background: rgba(0, 240, 255, 0.1); color: var(--neon-blue);"></div>
+            <h2 class="topic-section-title">¿Qué está pasando con este tema?</h2>
+          </div>
+          <div class="cyber-card" style="padding: 1.75rem; background: linear-gradient(135deg, rgba(0, 240, 255, 0.03) 0%, rgba(7, 9, 19, 0.9) 100%); line-height: 1.6; font-size: 0.95rem; color: var(--text-main);">
+            {didactic.what_is_happening}
+          </div>
+        </section>
+      )}
+
+      <!-- 2. ¿Qué sabemos y quí no sabemos? -->
+      {didactic && (
+        <section class="topic-section" style="margin-bottom: 2.5rem;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;" class="redactor-split-grid">
+            <!-- Quí sabemos -->
+            <div class="cyber-card" style="padding: 1.5rem; border-color: rgba(0, 245, 160, 0.25); background: rgba(0, 245, 160, 0.01);">
+              <span style="font-size: 0.72rem; text-transform: uppercase; color: var(--neon-green); font-weight: 800; display: block; margin-bottom: 0.5rem; letter-spacing: 0.05em;">í Hechos Probados (¿Qué sabemos?)</span>
+              <p style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.6; margin: 0;">
+                {didactic.what_we_know}
+              </p>
+            </div>
+
+            <!-- Quí no sabemos -->
+            <div class="cyber-card" style="padding: 1.5rem; border-color: rgba(255, 176, 32, 0.25); background: rgba(255, 176, 32, 0.01);">
+              <span style="font-size: 0.72rem; text-transform: uppercase; color: var(--neon-amber); font-weight: 800; display: block; margin-bottom: 0.5rem; letter-spacing: 0.05em;">í Incertidumbres (¿Qué no sabemos?)</span>
+              <p style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.6; margin: 0;">
+                {didactic.what_we_do_not_know}
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
+
+      <!-- Fichas didácticas clásicas (Fichas BOE) -->
+      <section class="topic-section" style="margin-bottom: 2.5rem;">
+        <div class="topic-section-header">
+          <div class="topic-section-icon" style="background: rgba(157, 78, 221, 0.1); color: var(--neon-purple);">á</div>
+          <h2 class="topic-section-title">Marco Legal y Normativo (BOE)</h2>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 1rem;">
+          {cards.map((card) => (
+            <div class="topic-edu-card">
+              <h4>{card.title}</h4>
+              <div style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.6;" set:html={card.htmlContent || card.text} />
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <!-- 4. Datos clave -->
+      {didactic && didactic.key_facts && (
+        <section class="topic-section" style="margin-bottom: 2.5rem;">
+          <div class="topic-section-header">
+            <div class="topic-section-icon" style="background: rgba(0, 245, 160, 0.1); color: var(--neon-green);"></div>
+            <h2 class="topic-section-title">Puntos y Cifras Clave</h2>
+          </div>
+          <div class="cyber-card" style="padding: 1.5rem; background: rgba(18, 22, 41, 0.4);">
+            <ul style="padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem; margin: 0; font-size: 0.9rem; color: var(--text-muted); line-height: 1.5;">
+              {didactic.key_facts.map(fact => (
+                <li style="list-style-type: none; position: relative; padding-left: 1.5rem;">
+                  <span style="position: absolute; left: 0; color: var(--neon-green); font-weight: bold;"></span>
+                  {fact}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
+
+      <!-- 5. Confusiones Frecuentes y Desmentidos rápidos -->
+      {didactic && didactic.frequent_confusions && (
+        <section class="topic-section" style="margin-bottom: 2.5rem;">
+          <div class="topic-section-header">
+            <div class="topic-section-icon" style="background: rgba(255, 0, 85, 0.1); color: var(--neon-rose);"></div>
+            <h2 class="topic-section-title">Confusiones Frecuentes (Bulos Desmentidos)</h2>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 1rem;">
+            {didactic.frequent_confusions.map(item => (
+              <div class="cyber-card" style="padding: 1.5rem; border-color: rgba(255, 0, 85, 0.2); background: rgba(255, 0, 85, 0.015);">
+                <div style="display: flex; gap: 0.5rem; align-items: start; margin-bottom: 0.5rem;">
+                  <span style="font-size: 1rem; line-height: 1;"></span>
+                  <strong style="color: var(--neon-rose); font-size: 0.9rem; line-height: 1.3;">Bulo: "{item.confusion}"</strong>
+                </div>
+                <div style="display: flex; gap: 0.5rem; align-items: start; padding-left: 1.5rem; font-size: 0.88rem; color: var(--text-muted); line-height: 1.5;">
+                  <span style="color: var(--neon-green); font-weight: bold; font-family: monospace;">REALIDAD:</span>
+                  <span>{item.reality}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <!-- 6. Respuestas rápidas para redes con botón de Copiar -->
+      {didactic && (
+        <section class="topic-section" style="margin-bottom: 2.5rem;">
+          <div class="topic-section-header">
+            <div class="topic-section-icon" style="background: rgba(157, 78, 221, 0.1); color: var(--neon-purple);"></div>
+            <h2 class="topic-section-title">Respuestas Rápidas para Redes</h2>
+          </div>
+          <div class="cyber-card" style="padding: 1.5rem; border-color: var(--neon-purple); background: rgba(157, 78, 221, 0.01); display: flex; flex-direction: column; gap: 1rem;">
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0; line-height: 1.4;">
+              Usa este resumen verificado para responder de forma neutral y didáctica en debates o hilos virales:
+            </p>
+            <div style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.05); padding: 1rem; border-radius: 8px; font-family: monospace; font-size: 0.82rem; line-height: 1.5; color: var(--text-main); position: relative;">
+              <span id="quick-copy-text">{didactic.quick_replies}</span>
+            </div>
+            <button class="cyber-btn" onclick="navigator.clipboard.writeText(document.getElementById('quick-copy-text').innerText); alert('áCopiado al portapapeles!');" style="align-self: flex-end; font-size: 0.72rem; padding: 0.4rem 1rem; border-color: var(--neon-purple); color: var(--neon-purple); border-radius: 8px;">
+               Copiar Copy
+            </button>
+          </div>
+        </section>
+      )}
+
+      <!-- 7. Cronologáa -->
+      {didactic && didactic.chronology && (
+        <section class="topic-section" style="margin-bottom: 2.5rem;">
+          <div class="topic-section-header">
+            <div class="topic-section-icon" style="background: rgba(255, 176, 32, 0.1); color: var(--neon-amber);"></div>
+            <h2 class="topic-section-title">Cronologáa de Acontecimientos</h2>
+          </div>
+          <div class="cyber-card" style="padding: 1.5rem 1.5rem 0.5rem 1.5rem; background: rgba(18, 22, 41, 0.4);">
+            <div style="display: flex; flex-direction: column; border-left: 2px solid rgba(255, 255, 255, 0.05); margin-left: 0.5rem; padding-left: 1.25rem; gap: 1.5rem;">
+              {didactic.chronology.map(item => (
+                <div style="position: relative;">
+                  <!-- Timeline Node -->
+                  <div style="position: absolute; left: calc(-1.25rem - 6px); top: 3px; width: 10px; height: 10px; border-radius: 50%; background: var(--neon-amber); box-shadow: 0 0 8px var(--neon-amber);"></div>
+                  <strong style="color: var(--neon-amber); font-size: 0.8rem; display: block; margin-bottom: 0.25rem; font-family: var(--font-title);">{item.date}</strong>
+                  <span style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.5; display: block;">{item.event}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
+      <!-- 8. Preguntas pendientes -->
+      {didactic && didactic.pending_questions && (
+        <section class="topic-section" style="margin-bottom: 2.5rem;">
+          <div class="topic-section-header">
+            <div class="topic-section-icon" style="background: rgba(0, 240, 255, 0.1); color: var(--neon-blue);"></div>
+            <h2 class="topic-section-title">Preguntas Pendientes y Desafáos</h2>
+          </div>
+          <div class="cyber-card" style="padding: 1.5rem; background: rgba(18, 22, 41, 0.4); border-color: rgba(0, 240, 255, 0.15);">
+            <p style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.5; margin: 0; font-style: italic;">
+              {didactic.pending_questions}
+            </p>
+          </div>
+        </section>
+      )}
+
+      <!-- 9. Fuentes oficiales de referencia -->
+      {didactic && didactic.main_sources && (
+        <section class="topic-section" style="margin-bottom: 1.5rem;">
+          <div class="topic-section-header">
+            <div class="topic-section-icon" style="background: rgba(0, 240, 255, 0.1); color: var(--neon-blue);"></div>
+            <h2 class="topic-section-title">Fuentes Oficiales y Enlaces de Interás</h2>
+          </div>
+          <div class="cyber-card" style="padding: 1.5rem; background: rgba(18, 22, 41, 0.3);">
+            <div style="display: grid; grid-template-columns: 1fr; gap: 0.85rem;">
+              {didactic.main_sources.map(src => (
+                <a href={src.url} target="_blank" rel="noopener noreferrer" style="display: flex; align-items: center; justify-content: space-between; text-decoration: none; font-size: 0.85rem; font-weight: bold; color: var(--neon-blue); padding: 0.65rem 1rem; background: rgba(255,255,255,0.015); border: 1px solid rgba(255,255,255,0.03); border-radius: 12px; transition: all 0.25s;">
+                  <span> {src.name}</span>
+                  <span style="font-size: 0.75rem;">Visitar Web Oficial &rarr;</span>
+                </a>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+    </div>
+
+    <!-- ? PANEL 3: EXPEDIENTES Y CASOS AUDITADOS ? -->
+    <div id="panel-radar" class="topic-tab-panel">
+      <section class="topic-section">
+        <div class="topic-section-header">
+          <div class="topic-section-icon" style="background: rgba(0, 245, 160, 0.1); color: var(--neon-green);"></div>
+          <h2 class="topic-section-title">Casos Auditados en el Radar</h2>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+          {articlesWithTags.map(art => (
+            <div class={"cyber-card " + getVerdictClass(art.verdict)} style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1.25rem; background: rgba(18, 22, 41, 0.45);">
+              <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                  <span class={"verdict-badge " + getVerdictClass(art.verdict)}>
+                    {art.verdict}
+                  </span>
+                  <span style="background: rgba(157, 78, 221, 0.1); border: 1px solid rgba(157, 78, 221, 0.2); border-radius: 4px; padding: 0.1rem 0.35rem; color: #ffffff; font-size: 0.7rem; font-weight: bold;">
+                    {art.emoji_tag || ' Falta contexto'}
+                  </span>
+                  <span style="font-family: monospace; color: var(--neon-amber); font-weight: 700; font-size: 0.7rem;">
+                     {art.matiza_score || 50}%
+                  </span>
+                </div>
+                <span style="color: var(--text-muted); font-size: 0.8rem; font-weight: 500;">
+                  Auditoría: {new Date(art.published_at).toLocaleDateString('es-ES')}
+                </span>
+              </div>
+
+              <div>
+                <h3 style="font-size: 1.35rem; font-weight: 700; margin-bottom: 0.5rem; letter-spacing: -0.02em; line-height: 1.25;">
+                  <a href={getLink(`/noticia/${art.slug}`)} class="article-link">{art.title}</a>
+                </h3>
+                <p style="color: var(--text-muted); font-size: 0.9rem; line-height: 1.4; margin-bottom: 1rem;">
+                  {art.subtitle}
+                </p>
+                {art.tags && art.tags.length > 0 && (
+                  <div style="display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 1rem;">
+                    {art.tags.map(tag => (
+                      <a href={getLink(`/tag/${tag.slug}`)} style="font-size: 0.65rem; color: var(--neon-blue); text-decoration: none; background: rgba(0, 240, 255, 0.05); border: 1px solid rgba(0, 240, 255, 0.15); padding: 0.15rem 0.4rem; border-radius: 4px; font-family: var(--font-title); font-weight: 700; transition: all 0.2s;" class="tag-chip">
+                        #{tag.name}
+                      </a>
+                    ))}
+                  </div>
+                )}
+                {art.multimedia_url && (
+                  <div style="margin-top: 0.5rem; margin-bottom: 1rem; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.06); max-height: 220px; background: #000; display: flex; align-items: center; justify-content: center;">
+                    <img src={art.multimedia_url} alt="Portada" style="width: 100%; height: 100%; object-fit: cover; max-height: 220px;" />
+                  </div>
+                )}
+                <div style="background: rgba(255,255,255,0.015); border-left: 2px solid var(--border-color); padding: 0.85rem 1rem; font-size: 0.8rem; font-style: italic; color: var(--text-muted); border-radius: 0 8px 8px 0; line-height: 1.45;">
+                  <strong>Afirmación viral:</strong> "{art.claim}"
+                </div>
+              </div>
+
+              <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border-color); padding-top: 1rem; font-size: 0.8rem; color: var(--text-muted);">
+                <span>Origen: <strong style="color: var(--text-main);">{art.origin_platform}</strong></span>
+                <a href={getLink(`/noticia/${art.slug}`)} class="cyber-btn" style="padding: 0.35rem 0.85rem; font-size: 0.7rem; border-radius: 10px; color: var(--neon-blue); border-color: rgba(0, 240, 255, 0.15); text-decoration: none;">
+                  Auditar Datos &rarr;
+                </a>
+              </div>
+            </div>
+          ))}
+
+          {articles.length === 0 && (
+            <div class="cyber-card" style="text-align: center; padding: 3.5rem; color: var(--text-muted); background: rgba(18, 22, 41, 0.3); border-radius: 20px; border: 1px dashed var(--border-color); font-size: 0.9rem;">
+              No hay desmentidos publicados en esta sección. El radar sigue escaneando.
+            </div>
+          )}
+        </div>
+      </section>
+
+      <!-- FAQ del Tema -->
+      <section class="cyber-card" style="padding: 1.5rem; background: rgba(18, 22, 41, 0.4); margin-bottom: 2rem;">
+        <h3 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 1.25rem; color: var(--neon-purple); letter-spacing: -0.01em;">Preguntas Frecuentes</h3>
+        <div style="display: flex; flex-direction: column; gap: 1.25rem; font-size: 0.85rem; line-height: 1.5;">
+          <div>
+            <strong style="color: var(--text-main); display: block; margin-bottom: 0.25rem;">¿De dónde proceden los datos contrastados?</strong>
+            <p style="color: var(--text-muted);">
+              Se contrastan directamente con el articulado oficial de las leyes vigentes publicadas en el BOE, bases de datos estadísticas oficiales (INE, SEPE) y memorias de la Fiscalía General del Estado.
+            </p>
+          </div>
+          <div style="border-top: 1px solid var(--border-color); padding-top: 1rem;">
+            <strong style="color: var(--text-main); display: block; margin-bottom: 0.25rem;">áHay fuentes oficiales fiables para auditar?</strong>
+            <p style="color: var(--text-muted);">
+              Sí, puedes consultar el catálogo completo de fuentes del Estado y enlaces del BOE al pie de cada artículo de verificación individual.
+            </p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ? PANEL 4: ENFOQUE POLÍTICO ? -->
+    <div id="panel-politica" class="topic-tab-panel">
+      <section class="topic-section">
+        <div class="topic-section-header">
+          <div class="topic-section-icon" style="background: rgba(157, 78, 221, 0.1); color: var(--neon-purple);"></div>
+          <h2 class="topic-section-title">Programas y Propuestas Políticas</h2>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+          {policyMeasures.map(pm => (
+            <div class="cyber-card" style="padding: 1.75rem; background: rgba(18, 22, 41, 0.45); display: flex; flex-direction: column; gap: 1.25rem;">
+              <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 0.75rem;">
+                <span style="background: rgba(0, 240, 255, 0.06); color: var(--neon-blue); border: 1px solid rgba(0, 240, 255, 0.2); font-size: 0.7rem; font-weight: 800; padding: 0.3rem 0.65rem; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.04em;">
+                  Propuesta electoral {pm.party_name}
+                </span>
+                <span style="color: var(--text-muted); font-size: 0.8rem;">
+                  área: <strong>{pm.area}</strong>
+                </span>
+              </div>
+
+              <div>
+                <h4 style="font-size: 1.15rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--text-main); font-family: var(--font-title);">
+                  {pm.title}
+                </h4>
+                <p style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.6; margin-bottom: 1rem;">
+                  {pm.plain_language_summary}
+                </p>
+
+                <div style="background: rgba(255, 255, 255, 0.015); border-left: 3px solid var(--neon-blue); padding: 0.75rem 1rem; border-radius: 0 8px 8px 0; margin-bottom: 0.75rem;">
+                  <strong style="font-size: 0.75rem; text-transform: uppercase; color: var(--neon-blue); display: block; margin-bottom: 0.25rem;">Texto del Programa:</strong>
+                  <span style="font-size: 0.82rem; color: var(--text-muted); font-style: italic; line-height: 1.5; display: block;">
+                    "{pm.original_text}"
+                  </span>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr; gap: 0.75rem; margin-top: 1rem;">
+                  <div style="background: rgba(0, 245, 160, 0.02); border: 1px solid rgba(0, 245, 160, 0.08); padding: 0.75rem 1rem; border-radius: 12px;">
+                    <strong style="font-size: 0.72rem; text-transform: uppercase; color: var(--neon-green); display: block; margin-bottom: 0.15rem;">Impacto Estimado:</strong>
+                    <span style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.4; display: block;">
+                      {pm.possible_impact}
+                    </span>
+                  </div>
+                  <div style="background: rgba(255, 176, 32, 0.02); border: 1px solid rgba(255, 176, 32, 0.08); padding: 0.75rem 1rem; border-radius: 12px;">
+                    <strong style="font-size: 0.72rem; text-transform: uppercase; color: var(--neon-amber); display: block; margin-bottom: 0.15rem;">Colectivos Afectados:</strong>
+                    <span style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.4; display: block;">
+                      {pm.target_groups}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid rgba(255, 255, 255, 0.05); padding-top: 0.85rem; font-size: 0.78rem; color: var(--text-muted);">
+                <span>Programa 2023</span>
+                {pm.source_page && (
+                  <span style="color: var(--neon-blue);">Página {pm.source_page}</span>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {policyMeasures.length === 0 && (
+            <div class="cyber-card" style="text-align: center; padding: 3.5rem; color: var(--text-muted); background: rgba(18, 22, 41, 0.3); border-radius: 20px; border: 1px dashed var(--border-color); font-size: 0.9rem;">
+              No hay propuestas electorales o medidas gubernamentales específicas registradas para este tema en la base de datos.
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+
+    <!-- Buscador Rápido -->
+    <section class="cyber-card" style="padding: 1.5rem; background: rgba(18, 22, 41, 0.3); text-align: center; border-style: dashed; margin-bottom: 2rem;">
+      <h3 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--text-main);">¿Has detectado bulos sobre este tema?</h3>
+      <p style="color: var(--text-muted); font-size: 0.85rem; line-height: 1.4; margin-bottom: 1.25rem; max-width: 400px; margin-left: auto; margin-right: auto;">
+        Ayúdanos a recopilar evidencias enviando capturas de publicaciones de redes al buzón del radar.
+      </p>
+      <a href="/buscador" class="cyber-btn accent" style="width: 100%; max-width: 250px; border-radius: 12px; font-size: 0.75rem;">
+        Buscar o reportar bulo
+      </a>
+    </section>
+
+  </div>
+</Layout>
+
+<script is:inline>
+  document.addEventListener('DOMContentLoaded', () => {
+    const tabButtons = document.querySelectorAll('.tab-btn');
+    const panels = document.querySelectorAll('.topic-tab-panel');
+
+    tabButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        // Remover clase activa de todos los botones y paneles
+        tabButtons.forEach(b => b.classList.remove('active'));
+        panels.forEach(p => p.classList.remove('active'));
+
+        // Activar el botón actual
+        btn.classList.add('active');
+
+        // Activar el panel correspondiente
+        const targetId = btn.getAttribute('data-target');
+        const targetPanel = document.getElementById(targetId);
+        if (targetPanel) {
+          targetPanel.classList.add('active');
+        }
+      });
+    });
+  });
+</script>
+
+<style>
+  .article-link:hover {
+    color: var(--neon-blue) !important;
+  }
+  
+  /* Estilos de pestañas (Tabs) */
+  .topic-tabs-nav {
+    display: flex;
+    gap: 0.6rem;
+    margin: 1.5rem 0;
+    border-bottom: 1px solid var(--border-color);
+    padding: 0.75rem 0.5rem;
+    overflow-x: auto;
+    scrollbar-width: none; /* Firefox */
+    position: sticky;
+    top: 64px; /* Justo debajo de la cabecera */
+    z-index: 990;
+    background: rgba(7, 9, 19, 0.95);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    margin-left: -0.5rem;
+    margin-right: -0.5rem;
+  }
+  .topic-tabs-nav::-webkit-scrollbar {
+    display: none; /* Chrome/Safari */
+  }
+  .tab-btn {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    padding: 0.65rem 1.15rem;
+    border-radius: 12px;
+    font-family: var(--font-title);
+    font-weight: 700;
+    font-size: 0.82rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .tab-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-main);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  .tab-btn.active {
+    background: rgba(0, 240, 255, 0.08);
+    color: var(--neon-blue);
+    border-color: var(--neon-blue);
+    box-shadow: 0 0 12px rgba(0, 240, 255, 0.15);
+  }
+  
+  .topic-tab-panel {
+    display: none;
+    animation: tabFadeIn 0.35s ease-out forwards;
+  }
+  .topic-tab-panel.active {
+    display: block;
+  }
+  .tag-chip:hover {
+    border-color: var(--neon-blue) !important;
+    background: rgba(0, 240, 255, 0.15) !important;
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.2);
+  }
+  
+  @keyframes tabFadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+</style>

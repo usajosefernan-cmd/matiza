@@ -1,0 +1,20 @@
+{
+  "vertical_mappings": [
+    {
+      "vertical": "Economía y Hacienda",
+      "keywords": ["impuestos", "autónomos", "irpf", "iva", "presión fiscal", "hacienda", "pib", "ipc", "inflación", "recaudación", "smi", "salario"]
+    },
+    {
+      "vertical": "Convivencia y Servicios",
+      "keywords": ["inmigración", "menas", "seguridad", "okupación", "delincuencia", "vivienda", "alquiler", "piso", "desahucio"]
+    },
+    {
+      "vertical": "Salud Pública",
+      "keywords": ["sanidad", "listas de espera", "hospital", "vacunas", "médicos", "enfermedad", "farmacia", "médica"]
+    },
+    {
+      "vertical": "Justicia y Corrupción",
+      "keywords": ["corrupción", "transparencia", "juez", "tribunal", "sentencia", "fiscalía", "imputado", "delito", "fraude", "boletín"]
+    }
+  ]
+}

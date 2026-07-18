@@ -1,0 +1,111 @@
+---
+interface Props {
+  userSubmissions: any[];
+  activeTopics: any[];
+}
+const { userSubmissions, activeTopics } = Astro.props;
+
+function getStatusBadgeClass(status: string) {
+  const s = (status || '').toLowerCase();
+  if (s === 'recibido') return 'amber';
+  if (s === 'en_cola') return 'purple';
+  if (s === 'investigando') return 'blue';
+  if (s === 'publicado') return 'green';
+  if (s === 'descartado_por_baja_relevancia') return 'rose';
+  return 'muted';
+}
+
+function getStatusLabel(status: string) {
+  const s = (status || '').toLowerCase();
+  if (s === 'recibido') return 'Recibido';
+  if (s === 'en_cola') return 'En cola';
+  if (s === 'investigando') return 'Investigando';
+  if (s === 'publicado') return 'Publicado';
+  if (s === 'descartado_por_baja_relevancia') return 'Descartado';
+  return status;
+}
+---
+
+<h2 class="section-title" style="margin-top: 0; margin-bottom: 0.5rem; font-size: 1.35rem; color: #fff;"> Cola de Triage: Envos del Radar Ciudadano</h2>
+<p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1.5rem; margin-top: 0;">
+  Triage y diagnstico de claims enviados de forma colaborativa por los ciudadanos en la portada pública.
+</p>
+
+<div class="cards-list" style="display: flex; flex-direction: column; gap: 1.25rem;">
+  {userSubmissions.map(sub => (
+    <div class="cyber-card" style="padding: 1.5rem; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(18, 22, 41, 0.25);">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+        <div>
+          <span class={`verdict-badge ${getStatusBadgeClass(sub.status)}`} style="font-size: 0.65rem; padding: 0.25rem 0.6rem; border-radius: 6px; font-weight: bold; text-transform: uppercase;">
+            {getStatusLabel(sub.status)}
+          </span>
+          {sub.relevance_score > 0 && (
+            <span style="font-size: 0.75rem; color: var(--neon-blue); margin-left: 0.5rem; font-weight: bold;">
+              Inters: {sub.relevance_score}/10
+            </span>
+          )}
+        </div>
+        <span style="font-size: 0.75rem; color: var(--text-muted);">
+          {new Date(sub.created_at).toLocaleString('es-ES')}
+        </span>
+      </div>
+
+      <p style="font-size: 0.95rem; color: var(--text-main); line-height: 1.45; font-style: italic; margin-bottom: 1rem; margin-top: 0;">
+        "{sub.submitted_text || sub.submitted_url}"
+      </p>
+
+      {sub.submitted_url && (
+        <div style="margin-bottom: 1rem;">
+          <a href={sub.submitted_url} target="_blank" style="font-size: 0.8rem; color: var(--neon-blue); text-decoration: none; font-weight: bold;">Enlace adjunto por el usuario </a>
+        </div>
+      )}
+
+      {sub.reason && (
+        <div style="background: rgba(255,255,255,0.02); padding: 0.5rem 0.75rem; border-left: 3px solid var(--border-color); font-size: 0.8rem; color: var(--text-muted); border-radius: 0 4px 4px 0; margin-bottom: 1rem;">
+          <strong>Diagnstico de Triage:</strong> {sub.reason}
+        </div>
+      )}
+
+      {(sub.status === 'recibido' || sub.status === 'monitorizando') && (
+        <div style="display: flex; gap: 1rem; border-top: 1px solid var(--border-color); padding-top: 1rem; flex-wrap: wrap;">
+          <!-- Aprobacin -->
+          <details style="flex: 1; min-width: 250px;" class="accordion-edit">
+            <summary style="cursor: pointer; color: var(--neon-green); font-weight: bold; font-size: 0.8rem;"> Aprobar para Investigacin</summary>
+            <form method="POST" action="?tab=user-submissions" class="edit-form" style="margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
+              <input type="hidden" name="action" value="approve_submission" />
+              <input type="hidden" name="submission_id" value={sub.id} />
+              <div class="form-group">
+                <label style="display: block; font-size: 0.65rem; color: var(--text-muted); margin-bottom: 0.25rem;">Vincular a Vertical:</label>
+                <select name="topic_id" required class="edit-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.5rem; border-radius: 6px; font-size: 0.8rem;">
+                  <option value=""> Seleccionar Vertical </option>
+                  {activeTopics.map(t => (
+                    <option value={t.id}>[{t.category}] {t.title}</option>
+                  ))}
+                </select>
+              </div>
+              <button type="submit" class="cyber-btn" style="border-color: var(--neon-green); color: var(--neon-green); width: 100%; margin-top: 0.5rem; padding: 0.5rem; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 0.75rem;">Confirmar Aprobacin</button>
+            </form>
+          </details>
+
+          <!-- Descarte -->
+          <details style="flex: 1; min-width: 250px;" class="accordion-edit">
+            <summary style="cursor: pointer; color: var(--neon-rose); font-weight: bold; font-size: 0.8rem;"> Descartar por Baja Relevancia</summary>
+            <form method="POST" action="?tab=user-submissions" class="edit-form" style="margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
+              <input type="hidden" name="action" value="discard_submission" />
+              <input type="hidden" name="submission_id" value={sub.id} />
+              <div class="form-group">
+                <label style="display: block; font-size: 0.65rem; color: var(--text-muted); margin-bottom: 0.25rem;">Motivo del descarte:</label>
+                <input type="text" name="reason" placeholder="Ej: Contenido comercial menor / Opinin subjetiva" required class="edit-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.5rem; border-radius: 6px; font-size: 0.8rem;" />
+              </div>
+              <button type="submit" class="cyber-btn" style="border-color: var(--neon-rose); color: var(--neon-rose); width: 100%; margin-top: 0.5rem; padding: 0.5rem; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 0.75rem;">Confirmar Descarte</button>
+            </form>
+          </details>
+        </div>
+      )}
+    </div>
+  ))}
+
+  {userSubmissions.length === 0 && (
+    <p class="empty-state" style="color: var(--text-muted); font-size: 0.9rem; font-style: italic;">No hay envos ciudadanos registrados.</p>
+  )}
+</div>

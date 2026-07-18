@@ -1,0 +1,18 @@
+---
+export const prerender = true;
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import DashboardPanel from '../../components/admin/DashboardPanel.astro';
+import { getDatabase } from '../../lib/db.js';
+import path from 'node:path';
+
+const db = getDatabase();
+
+
+const pendingCount = (db.prepare("SELECT COUNT(*) as c FROM scraped_items WHERE status = 'pendiente'").get() as any).c;
+
+db.close();
+---
+
+<AdminLayout title="Dashboard de Administración - MATIZA" activeTab="dashboard">
+  <DashboardPanel pendingCount={pendingCount} />
+</AdminLayout>

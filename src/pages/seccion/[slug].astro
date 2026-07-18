@@ -1,0 +1,131 @@
+---
+export const prerender = true;
+import Layout from '../../layouts/Layout.astro';
+import { getDatabase } from '../../lib/db.js';
+import path from 'node:path';
+
+const { slug } = Astro.params;
+
+const db = getDatabase();
+
+// Consultar el tema
+const theme = db.prepare("SELECT * FROM themes WHERE slug = ?").get(slug) as any;
+
+if (!theme) {
+  db.close();
+  return Astro.redirect('/404');
+}
+
+// Consultar los expedientes (topics) vinculados a este tema
+const topics = db.prepare("SELECT * FROM topics WHERE theme_id = ? AND status = 'activo' ORDER BY title").all(theme.id) as any[];
+
+// Para cada topic, contar el número de desmentidos publicados
+const topicsWithCounts = topics.map(t => {
+  const countRow = db.prepare("SELECT COUNT(*) as cnt FROM articles WHERE topic_id = ? AND status = 'publicado'").get(t.id) as any;
+  return {
+    ...t,
+    articleCount: countRow ? countRow.cnt : 0
+  };
+});
+
+db.close();
+
+const base = import.meta.env.BASE_URL;
+const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base;
+
+// Función auxiliar para enlaces
+const getLink = (p) => {
+  const pathClean = p.startsWith('/') ? p : '/' + p;
+  return `${cleanBase}${pathClean}`;
+};
+
+
+export async function getStaticPaths() {
+  const db = getDatabase();
+  const themes = db.prepare("SELECT slug FROM themes").all();
+  return themes.map(t => ({
+    params: { slug: t.slug }
+  }));
+}
+---
+
+<Layout title={`${theme.name}`} description={`Expedientes y desmentidos sobre ${theme.name} en España.`}>
+  <div class="container" style="padding-top: 1.5rem; padding-bottom: 5rem; max-width: 900px;">
+    
+    <!-- Breadcrumbs -->
+    <nav style="display: flex; gap: 0.5rem; align-items: center; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 1.5rem; font-family: var(--font-title);">
+      <a href={getLink('/')} style="color: var(--text-muted); text-decoration: none; transition: color 0.2s;">Inicio</a>
+      <span>/</span>
+      <span style="color: var(--text-muted);">Sección</span>
+      <span>/</span>
+      <span style="color: var(--neon-blue); font-weight: bold;">{theme.name}</span>
+    </nav>
+
+    <!-- Cabecera de la Sección -->
+    <div style="margin-bottom: 3rem; position: relative;">
+      <div style="position: absolute; top: -50px; left: -50px; width: 200px; height: 200px; background: radial-gradient(circle, rgba(0,240,255,0.07) 0%, rgba(0,0,0,0) 70%); pointer-events: none; z-index: -1;"></div>
+      <h1 class="text-gradient" style="font-size: 2.5rem; font-weight: 850; font-family: var(--font-title); letter-spacing: -0.04em; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.75rem;">
+        📂 {theme.name}
+      </h1>
+      <p style="color: var(--text-muted); font-size: 1.05rem; margin: 0; line-height: 1.5; max-width: 650px;">
+        {theme.description || `Expedientes informativos y análisis de datos en España sobre ${theme.name}.`}
+      </p>
+    </div>
+
+    <!-- Listado de Expedientes (Topics) -->
+    <h2 style="font-size: 1.1rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-main); font-family: var(--font-title); border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">
+      Expedientes Activos ({topicsWithCounts.length})
+    </h2>
+
+    <div class="topics-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem;">
+      {topicsWithCounts.map((t) => (
+        <a href={getLink(`/tema/${t.slug}`)} style="text-decoration: none; color: inherit; display: block;" class="topic-card-link">
+          <div class="cyber-card" style="padding: 1.5rem; height: 100%; display: flex; flex-direction: column; justify-content: space-between; gap: 1.25rem; transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; border-radius: 12px; background: rgba(18, 22, 41, 0.15);">
+            <div>
+              <!-- Cabecera Tarjeta -->
+              <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                <span style="font-size: 0.65rem; font-weight: 950; text-transform: uppercase; color: var(--neon-blue); background: rgba(0, 240, 255, 0.07); padding: 0.2rem 0.5rem; border-radius: 4px; letter-spacing: 0.05em; font-family: var(--font-title);">
+                  {t.category}
+                </span>
+                <span style="font-size: 0.7rem; color: var(--text-muted); font-weight: bold; background: rgba(255,255,255,0.03); padding: 0.2rem 0.4rem; border-radius: 4px;">
+                  {t.articleCount} {t.articleCount === 1 ? 'desmentido' : 'desmentidos'}
+                </span>
+              </div>
+
+              <!-- Título y descripción -->
+              <h3 style="font-size: 1.15rem; font-weight: 800; font-family: var(--font-title); color: #fff; margin: 0 0 0.5rem 0; line-height: 1.25;">
+                {t.title}
+              </h3>
+              <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0; line-height: 1.45;">
+                {t.description}
+              </p>
+            </div>
+
+            <!-- Resumen o Veredicto del expediente -->
+            <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); padding: 0.75rem; border-radius: 8px; font-size: 0.75rem;">
+              <strong style="color: #fff; display: block; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem; font-family: var(--font-title);">Resumen de Hechos:</strong>
+              <span style="color: var(--text-muted); line-height: 1.35; display: block;">{t.verdict_summary || 'Evaluando datos y marcos jurídicos oficiales...'}</span>
+            </div>
+          </div>
+        </a>
+      ))}
+      {topicsWithCounts.length === 0 && (
+        <div style="grid-column: 1 / -1; text-align: center; padding: 4rem 2rem; border: 1px dashed var(--border-color); border-radius: 12px; background: rgba(18,22,41,0.05);">
+          <span style="font-size: 2rem; display: block; margin-bottom: 1rem;">📂</span>
+          <p style="color: var(--text-muted); margin: 0; font-size: 0.9rem; font-style: italic;">No hay expedientes de desmentido abiertos en este tema todavía.</p>
+        </div>
+      )}
+    </div>
+
+  </div>
+</Layout>
+
+<style>
+  /* Efecto Hover Premium */
+  .topic-card-link:hover .cyber-card {
+    transform: translateY(-4px);
+    border-color: var(--neon-blue);
+    box-shadow: 0 8px 24px rgba(0, 240, 255, 0.12);
+    background: rgba(0, 240, 255, 0.02);
+  }
+</style>

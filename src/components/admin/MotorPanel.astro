@@ -1,0 +1,430 @@
+---
+interface Props {
+  draftsWithDetails: any[];
+  topicCaches: any[];
+  claimCaches: any[];
+  pipelineConfigJson: string;
+  freeLlmKeys?: any[];
+  pipelineRuns?: any[];
+}
+const { draftsWithDetails, topicCaches, claimCaches, pipelineConfigJson, freeLlmKeys = [], pipelineRuns = [] } = Astro.props;
+
+// Parsear la configuración del pipeline para rellenar los campos semánticos
+let config: any = { global: {}, phases: {} };
+try {
+  config = JSON.parse(pipelineConfigJson || '{}');
+} catch (e) {
+  console.error('[MotorPanel] Error parseando JSON de configuración:', e.message);
+}
+
+// Asegurar que existan secciones para evitar errores de null
+if (!config.global) config.global = {};
+if (!config.phases) config.phases = {};
+
+const phasesList = [
+  { id: '00', name: 'Fase 00: Hot Topics', script: '00-hot-topics-cron.js', desc: 'Analiza tendencias virales en RSS y Reddit para crear expedientes vivos.' },
+  { id: '01', name: 'Fase 01: Filtro Relevancia', script: '01-relevance-gate.js', desc: 'Determina si la afirmación tiene suficiente interés sociopolítico público.' },
+  { id: '02', name: 'Fase 02: Enrutador Semántico', script: '02-semantic-router.js', desc: 'Clasifica el claim en una categoría y lo asocia al expediente correspondiente.' },
+  { id: '03', name: 'Fase 03: Planificador de Fuentes', script: '03-source-strategy-planner.js', desc: 'Diseña la estrategia de fuentes oficiales (BOE, INE, ministerios).' },
+  { id: '04', name: 'Fase 04: Filtro de Ruido', script: '04-noise-filter.js', desc: 'Filtra spam, cotilleo o desinformación inverosímil menor.' },
+  { id: '05', name: 'Fase 05: Extractor de Claims', script: '05-claim-extractor.js', desc: 'Aísla el sujeto y la afirmación fáctica explícita a verificar.' },
+  { id: '06', name: 'Fase 06: Buscador de Evidencias', script: '06-evidence-finder.js', desc: 'Realiza búsquedas web DuckDuckGo en vivo y selecciona los enlaces oficiales más fiables.' },
+  { id: '07', name: 'Fase 07: Verificador', script: '07-verifier.js', desc: 'Analiza contradicciones lógicas entre el claim y las evidencias recopiladas.' },
+  { id: '08', name: 'Fase 08: Redactor del Artículo', script: '08-article-writer.js', desc: 'Escribe el artículo detallado en lenguaje formal y periodístico.' },
+  { id: '09', name: 'Fase 09: Calidad Deontológica', script: '09-quality-gate.js', desc: 'Filtro deontológico (Defensor del Lector) que audita que el tono sea neutral y libre de sesgos.' },
+  { id: '10', name: 'Fase 10: Cola de Revisión', script: '10-review-queue.js', desc: 'Encola el borrador y genera la checklist recomendada de moderación rápida humana.' },
+  { id: '11', name: 'Fase 11: Copies de Redes', script: '11-social-writer.js', desc: 'Redacta los copys promocionales hilos optimizados para Twitter y Telegram.' }
+];
+
+const agentsList = [
+  {
+    name: "🤖 Agente 1: Radar de Tendencias y RSS (Crawlers)",
+    desc: "Rastrea en caliente redes sociales y feeds RSS en España, deduplicando por afinidad semántica para detectar temas de desinformación virales.",
+    phases: ['00']
+  },
+  {
+    name: "🛡️ Agente 2: Triage y Filtrado de Contenido (Gatekeeper)",
+    desc: "Filtra spam, cotilleo o desinformaciones absurdas sin trascendencia, evalúa el impacto sociopolítico en España e identifica el claim fáctico a verificar.",
+    phases: ['04', '01', '05']
+  },
+  {
+    name: "🔍 Agente 3: Planificación e Investigación de Datos (Researcher)",
+    desc: "Enruta la afirmación al dossier temático idóneo, planifica qué organismos públicos tienen los registros reales (BOE, INE, ministerios) y recopila evidencias.",
+    phases: ['02', '03', '06']
+  },
+  {
+    name: "✍️ Agente 4: Verificación y Redacción Periodística (Writer & Audit)",
+    desc: "Contrasta el claim contra las evidencias oficiales recopiladas, redacta el artículo en un tono formal aséptico de desmentido y audita la calidad y neutralidad sin sesgos políticos.",
+    phases: ['07', '08', '09', '10']
+  },
+  {
+    name: "📣 Agente 5: Copies y Difusión de Redes (Social Media)",
+    desc: "Genera el copy promocional e informativo del desmentido para canales de Telegram y redacta el tuit e hilos explicativos asépticos en Twitter/X.",
+    phases: ['11']
+  }
+];
+---
+
+<h2 class="section-title" style="margin-top: 0; margin-bottom: 0.5rem; font-size: 1.35rem; color: #fff;">⚙️ Consola de Control del Motor y Salud del Clúster</h2>
+<p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 2rem; margin-top: 0;">
+  Control granular de las fases del motor modular, monitorización en tiempo real del clúster de modelos de FreeLLMAPI y sumario de la Caché Semántica.
+</p>
+
+<!-- ARQUITECTURA DE FAILOVER DE INFERENCIA VISUAL -->
+<div class="cyber-card" style="padding: 1.25rem; border: 1px solid rgba(255, 176, 32, 0.25); border-radius: 10px; background: rgba(255, 176, 32, 0.03); margin-bottom: 2rem;">
+  <h4 style="margin: 0 0 0.75rem 0; font-size: 0.8rem; color: var(--neon-amber); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.5rem;">
+    📡 Arquitectura de Failover e Inferencia (4 Capas Redundantes)
+  </h4>
+  <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; font-size: 0.75rem;">
+    <div style="background: rgba(0, 240, 255, 0.06); border: 1px solid rgba(0, 240, 255, 0.25); padding: 0.6rem; border-radius: 6px; flex: 1; min-width: 220px;">
+      <strong style="color: var(--neon-blue); display: block; margin-bottom: 0.25rem;">Capa 1: Inferencia Principal</strong>
+      <span style="color: var(--text-muted); font-size: 0.7rem; line-height: 1.3; display: block;">FreeLLMAPI en localhost (enruta a las 18 claves saludables de Groq/Gemini/Cerebras).</span>
+    </div>
+    <div style="color: var(--neon-amber); font-size: 1.2rem; font-weight: bold;">➔</div>
+    <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255,255,255,0.06); padding: 0.6rem; border-radius: 6px; flex: 1; min-width: 220px;">
+      <strong style="color: #fff; display: block; margin-bottom: 0.25rem;">Capa 2: Fallback Primario</strong>
+      <span style="color: var(--text-muted); font-size: 0.7rem; line-height: 1.3; display: block;">Google Gemini Directo (llamada directa al SDK oficial con tu API Key de respaldo).</span>
+    </div>
+    <div style="color: var(--neon-amber); font-size: 1.2rem; font-weight: bold;">➔</div>
+    <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255,255,255,0.06); padding: 0.6rem; border-radius: 6px; flex: 1; min-width: 220px;">
+      <strong style="color: #fff; display: block; margin-bottom: 0.25rem;">Capa 3: Fallback Secundario</strong>
+      <span style="color: var(--text-muted); font-size: 0.7rem; line-height: 1.3; display: block;">OpenRouter API (enruta a modelos libres como Llama 3 8B Instruct Free).</span>
+    </div>
+    <div style="color: var(--neon-amber); font-size: 1.2rem; font-weight: bold;">➔</div>
+    <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255,255,255,0.06); padding: 0.6rem; border-radius: 6px; flex: 1; min-width: 220px;">
+      <strong style="color: #fff; display: block; margin-bottom: 0.25rem;">Capa 4: Fallback Final</strong>
+      <span style="color: var(--text-muted); font-size: 0.7rem; line-height: 1.3; display: block;">Groq API (llamada directa a Llama 3.3 70B como último recurso de inferencia).</span>
+    </div>
+  </div>
+</div>
+
+<!-- SALUD DEL CLUSTER DE MODULOS FREELLMAPI -->
+<div class="cyber-card" style="padding: 1.5rem; border: 1px solid rgba(0, 255, 196, 0.35); border-radius: 12px; background: rgba(18, 22, 41, 0.35); margin-bottom: 2rem; box-shadow: 0 0 15px rgba(0, 255, 196, 0.05);">
+  <h3 class="card-title" style="margin-top: 0; margin-bottom: 0.5rem; font-size: 1.1rem; color: #00ffc4; display: flex; align-items: center; gap: 0.5rem;">
+    🟢 Estado de Salud del Clúster de Modelos Libres (FreeLLMAPI)
+  </h3>
+  <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1.25rem; margin-top: 0;">
+    Claves de inferencia activas y validadas directamente desde la base de datos de FreeLLMAPI en localhost.
+  </p>
+
+  {freeLlmKeys.length > 0 ? (
+    <div style="overflow-x: auto; max-height: 250px; overflow-y: auto; padding-right: 0.5rem;">
+      <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.8rem;">
+        <thead>
+          <tr style="border-bottom: 1px solid rgba(255,255,255,0.08); color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase;">
+            <th style="padding: 0.5rem;">Proveedor</th>
+            <th style="padding: 0.5rem;">Nombre / Etiqueta</th>
+            <th style="padding: 0.5rem;">Endpoint / Custom Base URL</th>
+            <th style="padding: 0.5rem; text-align: center;">Estado</th>
+            <th style="padding: 0.5rem; text-align: right;">Último Test</th>
+          </tr>
+        </thead>
+        <tbody>
+          {freeLlmKeys.map(k => {
+            let statusColor = '#ffb020'; // unknown
+            let statusLabel = 'PENDIENTE';
+            if (k.status === 'healthy') { statusColor = '#00ffc4'; statusLabel = 'SALUDABLE'; }
+            else if (k.status === 'invalid') { statusColor = '#ff3366'; statusLabel = 'INVÁLIDA'; }
+            else if (k.status === 'error') { statusColor = '#ff7700'; statusLabel = 'ERROR'; }
+
+            return (
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.02); background: rgba(255,255,255,0.005); transition: background 0.2s;">
+                <td style="padding: 0.5rem; font-weight: bold; color: #fff; text-transform: uppercase; font-size: 0.7rem;">{k.platform}</td>
+                <td style="padding: 0.5rem; color: #a9b2c3;">{k.label}</td>
+                <td style="padding: 0.5rem; color: var(--text-muted); font-family: monospace; font-size: 0.7rem; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                  {k.base_url || 'Endpoint Oficial'}
+                </td>
+                <td style="padding: 0.5rem; text-align: center;">
+                  <span style={`display: inline-block; padding: 0.15rem 0.45rem; border-radius: 4px; font-size: 0.65rem; font-weight: bold; border: 1px solid ${statusColor}; color: ${statusColor}; background: rgba(0, 0, 0, 0.25); text-shadow: 0 0 4px ${statusColor}40;`}>
+                    {statusLabel}
+                  </span>
+                </td>
+                <td style="padding: 0.5rem; text-align: right; color: var(--text-muted); font-size: 0.7rem;">
+                  {k.last_checked_at ? new Date(k.last_checked_at).toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit', second:'2-digit'}) : 'Nunca'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  ) : (
+    <p style="color: var(--text-muted); font-size: 0.8rem; font-style: italic; margin: 0;">No se ha detectado ninguna clave cargada en la base de datos de FreeLLMAPI en localhost/VPS.</p>
+  )}
+</div>
+
+<!-- HISTORIAL DE EJECUCIONES DEL PIPELINE DE HERMES -->
+<div class="cyber-card" style="padding: 1.5rem; border: 1px solid rgba(255, 176, 32, 0.35); border-radius: 12px; background: rgba(18, 22, 41, 0.35); margin-bottom: 2rem; box-shadow: 0 0 15px rgba(255, 176, 32, 0.05);">
+  <h3 class="card-title" style="margin-top: 0; margin-bottom: 0.5rem; font-size: 1.1rem; color: var(--neon-amber); display: flex; align-items: center; gap: 0.5rem;">
+    📊 Historial de Auditoría de Ejecuciones de Hermes
+  </h3>
+  <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1.25rem; margin-top: 0;">
+    Registro histórico de telemetría y rendimiento de los crons unificados del pipeline de IA en vivo.
+  </p>
+
+  {pipelineRuns.length > 0 ? (
+    <div style="overflow-x: auto; max-height: 350px; overflow-y: auto; padding-right: 0.5rem;">
+      <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.8rem;">
+        <thead>
+          <tr style="border-bottom: 1px solid rgba(255,255,255,0.08); color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase;">
+            <th style="padding: 0.5rem;">Ejecución (ID)</th>
+            <th style="padding: 0.5rem;">Fecha y Hora</th>
+            <th style="padding: 0.5rem; text-align: center;">Duración</th>
+            <th style="padding: 0.5rem; text-align: center;">Claims Radar</th>
+            <th style="padding: 0.5rem; text-align: center;">Desmentidos Publicados</th>
+            <th style="padding: 0.5rem; text-align: right;">Detalles de Telemetría</th>
+          </tr>
+        </thead>
+        <tbody>
+          {pipelineRuns.map(run => {
+            let telPhases = [];
+            try {
+              telPhases = JSON.parse(run.telemetry_json || '[]');
+            } catch(e){}
+
+            return (
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.02); background: rgba(255,255,255,0.005); transition: background 0.2s;">
+                <td style="padding: 0.5rem; font-family: monospace; font-weight: bold; color: var(--neon-blue); font-size: 0.75rem;">{run.id}</td>
+                <td style="padding: 0.5rem; color: #a9b2c3;">{new Date(run.started_at).toLocaleString('es-ES')}</td>
+                <td style="padding: 0.5rem; text-align: center; font-weight: bold; color: #fff;">{run.duration_sec}s</td>
+                <td style="padding: 0.5rem; text-align: center; color: var(--neon-blue); font-weight: bold;">{run.claims_scraped}</td>
+                <td style="padding: 0.5rem; text-align: center; color: #00ffc4; font-weight: bold;">{run.articles_published}</td>
+                <td style="padding: 0.5rem; text-align: right;">
+                  <details style="display: inline-block; width: 100%; text-align: left;">
+                    <summary style="cursor: pointer; font-size: 0.7rem; color: var(--neon-amber); outline: none; list-style: none; display: inline-block; padding: 0.15rem 0.45rem; border: 1px solid rgba(255,176,32,0.3); border-radius: 4px; background: rgba(0,0,0,0.25);">
+                      Ver Fases
+                    </summary>
+                    <div style="margin-top: 0.5rem; background: #05070e; border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 0.5rem; font-size: 0.7rem; font-family: monospace; max-width: 450px; overflow-x: auto;">
+                      <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                          <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text-muted);">
+                            <th style="padding: 0.25rem; text-align: left;">Fase</th>
+                            <th style="padding: 0.25rem; text-align: right;">Tiempo</th>
+                            <th style="padding: 0.25rem; text-align: right;">Proveedor</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {telPhases.map((p: any) => (
+                            <tr style="border-bottom: 1px solid rgba(255,255,255,0.01);">
+                              <td style="padding: 0.25rem; color: #fff;">{p.name}</td>
+                              <td style="padding: 0.25rem; text-align: right; color: var(--neon-blue); font-weight: bold;">{(p.durationMs / 1000).toFixed(2)}s</td>
+                              <td style="padding: 0.25rem; text-align: right; color: var(--text-muted);">{p.provider}/{p.model}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  ) : (
+    <p style="color: var(--text-muted); font-size: 0.8rem; font-style: italic; margin: 0;">No se registran ejecuciones previas de Hermes en la base de datos local.</p>
+  )}
+</div>
+
+<div style="display: grid; grid-template-columns: 1.5fr 1fr; gap: 2rem; align-items: start; margin-bottom: 2rem;" class="redactor-split-grid">
+  <!-- Reprocesado de fases -->
+  <div class="cyber-card" style="padding: 1.5rem; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(18, 22, 41, 0.25);">
+    <h3 class="card-title" style="margin-top: 0; margin-bottom: 0.5rem; font-size: 1.1rem; color: #fff;">🛠️ Reprocesado de Fases Aisladas</h3>
+    <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem;">
+      Si deseas corregir o volver a generar únicamente la redacción del desmentido o los copies de redes sin volver a buscar evidencias ni gastar tokens adicionales.
+    </p>
+
+    <div class="scroller-list" style="max-height: 380px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem;">
+      {draftsWithDetails.map(art => (
+        <div class="scroller-item" style="border: 1px solid var(--border-color); padding: 0.75rem; border-radius: 8px; background: rgba(0,0,0,0.15);">
+          <div style="font-size: 0.85rem; font-weight: bold; margin-bottom: 0.5rem; color: #fff; line-height: 1.3;">
+            {art.title}
+          </div>
+          <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+            <form method="POST" style="margin: 0;">
+              <input type="hidden" name="action" value="reprocess_phase" />
+              <input type="hidden" name="article_id" value={art.id} />
+              <input type="hidden" name="phase" value="08-article-writer" />
+              <button type="submit" class="cyber-btn" style="border-color: var(--neon-blue); color: var(--neon-blue); font-size: 0.7rem; padding: 0.3rem 0.6rem; border-radius: 4px; cursor: pointer; font-weight: bold;">Reprocesar Redacción (Fase 08)</button>
+            </form>
+            
+            <form method="POST" style="margin: 0;">
+              <input type="hidden" name="action" value="reprocess_phase" />
+              <input type="hidden" name="article_id" value={art.id} />
+              <input type="hidden" name="phase" value="11-social-writer" />
+              <button type="submit" class="cyber-btn" style="border-color: var(--neon-purple); color: var(--neon-purple); font-size: 0.7rem; padding: 0.3rem 0.6rem; border-radius: 4px; cursor: pointer; font-weight: bold;">Reprocesar RRSS (Fase 11)</button>
+            </form>
+          </div>
+        </div>
+      ))}
+      {draftsWithDetails.length === 0 && (
+        <p class="empty-state" style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No hay borradores disponibles para reprocesar.</p>
+      )}
+    </div>
+  </div>
+
+  <!-- Capa de Caché -->
+  <div class="cyber-card" style="padding: 1.5rem; border: 1px solid var(--neon-amber); border-radius: 12px; background: rgba(18, 22, 41, 0.25);">
+    <h3 class="card-title" style="color: var(--neon-amber); margin-top: 0; margin-bottom: 1.25rem; font-size: 1.1rem;"> Sumario de Caché Semántica</h3>
+    
+    <!-- Caches de Temas -->
+    <div style="margin-bottom: 1.5rem;">
+      <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); font-weight: 800; display: block; margin-bottom: 0.5rem;">Caché de Verticales ({topicCaches.length})</span>
+      <div class="scroller-list" style="max-height: 120px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(0,0,0,0.2);">
+        {topicCaches.map(c => (
+          <div class="scroller-item" style="font-size: 0.75rem; padding: 0.5rem; border-bottom: 1px solid var(--border-color);">
+            <strong>ID: {c.topic_id}</strong>
+            <div style="color: var(--text-muted); margin-top: 0.15rem;">Última actualización: {c.last_updated}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    <!-- Caches de Claims -->
+    <div>
+      <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); font-weight: 800; display: block; margin-bottom: 0.5rem;">Caché de Claims Normalizados ({claimCaches.length})</span>
+      <div class="scroller-list" style="max-height: 120px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(0,0,0,0.2);">
+        {claimCaches.map(c => (
+          <div class="scroller-item" style="font-size: 0.75rem; padding: 0.5rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: start; gap: 0.5rem;">
+            <div>
+              <strong style="color: var(--neon-amber);">{c.previous_verdict}</strong>
+              <div style="color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;">Hash: {c.normalized_claim_hash}</div>
+            </div>
+            <span style="font-size: 0.65rem; color: var(--text-muted); white-space: nowrap;">{new Date(c.last_seen).toLocaleDateString('es-ES')}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- EDITOR SEMÁNTICO DE PIPELINE EN VIVO (ORGANIZADO POR AGENTES COHERENTES) -->
+<div class="cyber-card" style="padding: 1.5rem; border-color: var(--neon-amber); background: rgba(18, 22, 41, 0.35); text-align: left;">
+  <h3 class="card-title" style="color: var(--neon-amber); margin-top: 0; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+    🧠 Consola de Configuración y Ejecución de los Agentes en Vivo
+  </h3>
+  <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.5rem; line-height: 1.45;">
+    Personaliza las directrices, proveedores de IA y modelos asignados a los 5 agentes autónomos que gestionan el motor de Matiza. Las instrucciones de cada fase se despliegan en acordeones individuales.
+  </p>
+
+  <form method="POST" style="margin: 0; display: flex; flex-direction: column; gap: 1.5rem;">
+    <input type="hidden" name="action" value="save_pipeline_config" />
+    
+    <!-- Parámetros Globales del Servidor -->
+    <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; border: 1px solid rgba(255, 176, 32, 0.15); display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+      <span style="grid-column: 1 / -1; font-size: 0.75rem; font-weight: 800; color: var(--neon-amber); text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: -0.25rem;">Parámetros de Servidor y Fallback Global:</span>
+      
+      <div class="form-group">
+        <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.3rem; font-weight: bold;">Proveedor IA por Defecto:</label>
+        <select name="global_provider" style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #fff; padding: 0.45rem; border-radius: 4px; font-size: 0.8rem; outline: none;">
+          <option value="freellmapi" selected={config.global.default_provider === 'freellmapi'}>FreeLLMAPI Gateway (Local/VPS)</option>
+          <option value="gemini" selected={config.global.default_provider === 'gemini'}>Gemini (Google DeepMind)</option>
+          <option value="nous" selected={config.global.default_provider === 'nous'}>Nous Research (Inferencia Libre)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.3rem; font-weight: bold;">Proveedor de Fallback (Respaldo):</label>
+        <select name="fallback_provider" style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #fff; padding: 0.45rem; border-radius: 4px; font-size: 0.8rem; outline: none;">
+          <option value="gemini" selected={config.global.fallback_provider === 'gemini'}>Gemini (Google)</option>
+          <option value="freellmapi" selected={config.global.fallback_provider === 'freellmapi'}>FreeLLMAPI Gateway</option>
+          <option value="nous" selected={config.global.fallback_provider === 'nous'}>Nous Research (Recomendado)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.3rem; font-weight: bold;">Modelo de Fallback (Respaldo):</label>
+        <input type="text" name="fallback_model" value={config.global.fallback_model || 'gemini-2.5-flash'} style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #fff; padding: 0.45rem; border-radius: 4px; font-size: 0.8rem; outline: none;" />
+      </div>
+
+      <div class="form-group">
+        <label style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.3rem; font-weight: bold;">Timeout Máximo (ms):</label>
+        <input type="number" name="global_timeout" value={config.global.timeout_ms || 180000} style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #fff; padding: 0.45rem; border-radius: 4px; font-size: 0.8rem; outline: none;" />
+      </div>
+
+      <div class="form-group" style="grid-column: span 2;">
+        <label style="display: block; font-size: 0.7rem; color: var(--neon-amber); margin-bottom: 0.3rem; font-weight: bold;">⚡ Piloto Automático (Publicación Directa en Vivo):</label>
+        <select name="autopilot" style="width: 100%; background: #05070e; border: 1px solid var(--neon-amber); color: #ffb020; padding: 0.45rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold; outline: none;">
+          <option value="false" selected={!config.global.autopilot}>DESACTIVADO (Guardar borradores para moderar)</option>
+          <option value="true" selected={!!config.global.autopilot}>ACTIVADO (Publicar desmentidos directos en vivo)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- AGENTES COORDINADOS DEL MOTOR (5 BLOQUES DE AGENTES) -->
+    <div style="display: flex; flex-direction: column; gap: 1.5rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.5rem;">
+      {agentsList.map(agent => (
+        <div class="cyber-card" style="padding: 1.25rem; border-color: rgba(255, 255, 255, 0.05); background: rgba(0, 0, 0, 0.15); border-left: 3px solid var(--neon-amber);">
+          <h4 style="margin: 0 0 0.35rem 0; font-size: 0.95rem; color: #fff; font-weight: bold;">{agent.name}</h4>
+          <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 1.25rem 0; line-height: 1.45;">{agent.desc}</p>
+          
+          <div style="display: flex; flex-direction: column; gap: 1rem;">
+            {agent.phases.map(phId => {
+              const ph = phasesList.find(p => p.id === phId);
+              if (!ph) return null;
+              const phConf = config.phases[ph.id] || {};
+              return (
+                <div style="background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.04); padding: 1rem; border-radius: 8px; display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 0.75rem; align-items: start;">
+                  <div style="grid-column: span 4; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 0.5rem; margin-bottom: 0.25rem; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: bold; font-size: 0.85rem; color: #fff;">
+                      {ph.name} 
+                      <span style="font-weight: normal; font-size: 0.7rem; color: var(--text-muted); margin-left: 0.5rem;">({ph.script})</span>
+                    </span>
+                    <button type="button" onclick={`runAdminJob('ai-phase-${ph.id}')`} class="cyber-btn" style="font-size: 0.65rem; padding: 0.25rem 0.6rem; border-radius: 4px; border-color: #00ffc4; color: #00ffc4; font-weight: bold; cursor: pointer;">
+                      ▶ Ejecutar en Caliente
+                    </button>
+                  </div>
+                  
+                  <div class="form-group" style="grid-column: span 1;">
+                    <label style="display: block; font-size: 0.65rem; color: var(--text-muted); margin-bottom: 0.25rem;">Proveedor:</label>
+                    <select name={`phase_${ph.id}_provider`} style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #fff; padding: 0.35rem; border-radius: 4px; font-size: 0.75rem; outline: none;">
+                      <option value="freellmapi" selected={phConf.provider === 'freellmapi'}>FreeLLMAPI</option>
+                      <option value="gemini" selected={phConf.provider === 'gemini'}>Gemini</option>
+                      <option value="nous" selected={phConf.provider === 'nous'}>Nous (Free)</option>
+                    </select>
+                  </div>
+
+                  <div class="form-group" style="grid-column: span 2;">
+                    <label style="display: block; font-size: 0.65rem; color: var(--text-muted); margin-bottom: 0.25rem;">
+                      Modelo a usar:
+                      <span style="margin-left: 0.25rem; font-size: 0.6rem; font-weight: normal;">
+                        (Sugeridos:
+                        <a href="javascript:void(0)" onclick={`document.getElementsByName('phase_${ph.id}_model')[0].value='auto'`} style="color: var(--neon-amber); text-decoration: none; margin-right: 0.2rem; font-weight: bold;">auto</a>|
+                        <a href="javascript:void(0)" onclick={`document.getElementsByName('phase_${ph.id}_model')[0].value='gemini-2.5-flash'`} style="color: #00ffc4; text-decoration: none; margin-right: 0.2rem; margin-left: 0.2rem;">flash</a>|
+                        <a href="javascript:void(0)" onclick={`document.getElementsByName('phase_${ph.id}_model')[0].value='deepseek-r1'`} style="color: #ff00ff; text-decoration: none; margin-right: 0.2rem; margin-left: 0.2rem;">r1</a>|
+                        <a href="javascript:void(0)" onclick={`document.getElementsByName('phase_${ph.id}_model')[0].value='deepseek-v3'`} style="color: #00f0ff; text-decoration: none; margin-left: 0.2rem;">v3</a>)
+                      </span>
+                    </label>
+                    <input type="text" name={`phase_${ph.id}_model`} value={phConf.model || 'gemini-2.5-flash'} style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #fff; padding: 0.35rem; border-radius: 4px; font-size: 0.75rem; outline: none;" />
+                  </div>
+
+                  <div class="form-group" style="grid-column: span 1;">
+                    <label style="display: block; font-size: 0.65rem; color: var(--text-muted); margin-bottom: 0.25rem;">Temperatura:</label>
+                    <input type="number" step="0.1" min="0" max="1" name={`phase_${ph.id}_temp`} value={phConf.temperature !== undefined ? phConf.temperature : 0.2} style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #fff; padding: 0.35rem; border-radius: 4px; font-size: 0.75rem; outline: none;" />
+                  </div>
+
+                  <!-- ACORDEÓN EXPANSIVO PARA PROMPT SISTEMA -->
+                  <div class="form-group" style="grid-column: span 4; border-top: 1px dashed rgba(255,255,255,0.04); padding-top: 0.5rem; margin-top: 0.25rem;">
+                    <details style="width: 100%;">
+                      <summary style="cursor: pointer; font-size: 0.75rem; color: var(--neon-amber); font-weight: bold; outline: none; list-style: none; display: flex; align-items: center; gap: 0.25rem;">
+                        <span>📝 Ver/Editar Instrucciones y Rol del Agente (System Prompt)</span>
+                      </summary>
+                      <textarea name={`phase_${ph.id}_prompt`} rows="8" style="width: 100%; background: #05070e; border: 1px solid var(--border-color); color: #a9b2c3; padding: 0.5rem; border-radius: 4px; font-size: 0.75rem; font-family: monospace; resize: vertical; line-height: 1.45; margin-top: 0.5rem; outline: none;">{phConf.system_prompt || ''}</textarea>
+                    </details>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+
+    <div style="display: flex; justify-content: flex-end; align-items: center; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1rem;">
+      <button type="submit" class="cyber-btn" style="border-color: var(--neon-amber); color: var(--neon-amber); font-weight: bold; cursor: pointer; padding: 0.6rem 1.5rem; border-radius: 6px; font-size: 0.8rem;">
+        💾 Guardar Configuración de los Agentes
+      </button>
+    </div>
+  </form>
+</div>

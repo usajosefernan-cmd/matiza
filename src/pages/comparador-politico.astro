@@ -1,0 +1,279 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { getDatabase } from '../lib/db.js';
+import path from 'node:path';
+
+const db = getDatabase();
+
+
+// Cargar partidos
+const parties = db.prepare("SELECT * FROM parties ORDER BY name").all() as any[];
+
+// Cargar todas las medidas de programas electorales
+const measures = db.prepare(`
+  SELECT pm.*, p.name as party_name, p.slug as party_slug, p.current_leader
+  FROM policy_measures pm
+  LEFT JOIN parties p ON pm.party_id = p.id
+`).all() as any[];
+
+// Obtener todas las áreas/temáticas únicas disponibles
+const areas = [...new Set(measures.map(m => m.area))];
+
+db.close();
+---
+
+<Layout title="Comparador Político de Medidas" description="Compara de forma objetiva las propuestas electorales e impactos de los partidos políticos en España por temáticas.">
+  <div class="container" style="padding-top: 1.5rem; padding-bottom: 5rem;">
+    
+    <div style="margin-bottom: 2.5rem; text-align: center; max-width: 800px; margin-left: auto; margin-right: auto;">
+      <span style="background: var(--neon-rose); color: var(--bg-dark); font-weight: 800; font-size: 0.75rem; padding: 0.2rem 0.6rem; text-transform: uppercase; border-radius: 4px;">
+        AUDITORÍA ELECTORAL COMPARADA
+      </span>
+      <h1 style="font-size: 2.4rem; line-height: 1.1; margin-top: 0.75rem; margin-bottom: 1rem; font-family: var(--font-title); font-weight: 850;">
+        Comparador <span class="text-gradient-blue">Político</span>
+      </h1>
+      <p style="color: var(--text-muted); font-size: 0.95rem; line-height: 1.5;">
+        Selecciona un área temática para contrastar cara a cara lo que propone cada partido en su programa electoral, la traducción a lenguaje claro y su viabilidad.
+      </p>
+    </div>
+
+    <!-- Botones de Filtro Temático -->
+    <div style="display: flex; justify-content: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 2rem;" id="area-filters">
+      {areas.map((area, idx) => (
+        <button 
+          class={`cyber-btn filter-area-btn ${idx === 0 ? 'active accent' : ''}`}
+          data-area={area}
+          style="font-size: 0.85rem; border-radius: 20px; padding: 0.4rem 1rem;"
+        >
+          {area}
+        </button>
+      ))}
+    </div>
+
+    <!-- VISTA ESCRITORIO: Tabla Comparativa Cyberpunk -->
+    <div class="cyber-card blue table-desktop-container" style="background: var(--bg-card); padding: 1.5rem; margin-bottom: 2rem;">
+      <table style="width: 100%; border-collapse: collapse; text-align: left;">
+        <thead>
+          <tr style="border-bottom: 2px solid var(--border-color);">
+            <th style="padding: 1rem; color: var(--neon-blue); font-family: var(--font-title); font-size: 1rem; width: 15%;">Partido</th>
+            <th style="padding: 1rem; color: var(--neon-blue); font-family: var(--font-title); font-size: 1rem; width: 40%;">Propuesta (Programa Oficial)</th>
+            <th style="padding: 1rem; color: var(--neon-blue); font-family: var(--font-title); font-size: 1rem; width: 30%;">Impacto Estimado</th>
+            <th style="padding: 1rem; color: var(--neon-blue); font-family: var(--font-title); font-size: 1rem; width: 15%;">Enlace</th>
+          </tr>
+        </thead>
+        <tbody id="comparison-rows">
+          {measures.map(m => (
+            <tr 
+              class="comparison-row" 
+              data-area={m.area}
+              style="border-bottom: 1px solid var(--border-color); transition: background-color 0.2s;"
+            >
+              <!-- Partido -->
+              <td style="padding: 1.5rem 1rem; vertical-align: top;">
+                <span class={`party-badge ${m.party_slug}`} style="font-weight: 800; font-size: 0.7rem; text-transform: uppercase; padding: 0.15rem 0.4rem; border-radius: 4px; display: inline-block; margin-bottom: 0.25rem;">
+                  {m.party_name}
+                </span>
+                <span style="font-size: 0.75rem; color: var(--text-muted); display: block;">{m.current_leader}</span>
+              </td>
+              
+              <!-- Propuesta -->
+              <td style="padding: 1.5rem 1rem; vertical-align: top;">
+                <div style="background: rgba(0,0,0,0.15); border-left: 2px solid var(--border-color); padding: 0.5rem 0.75rem; font-style: italic; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+                  "{m.original_text}"
+                </div>
+                <div>
+                  <strong style="color: var(--neon-blue); font-size: 0.75rem; text-transform: uppercase; display: block; margin-bottom: 0.15rem;">En lenguaje sencillo:</strong>
+                  <p style="font-size: 0.85rem; color: var(--text-main); margin: 0; line-height: 1.4;">{m.plain_language_summary}</p>
+                </div>
+              </td>
+              
+              <!-- Impacto -->
+              <td style="padding: 1.5rem 1rem; vertical-align: top;">
+                <strong style="color: var(--neon-purple); font-size: 0.75rem; text-transform: uppercase; display: block; margin-bottom: 0.15rem;">Efecto estimado:</strong>
+                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0 0 0.5rem 0; line-height: 1.4;">{m.possible_impact}</p>
+                <div style="font-size: 0.75rem; color: var(--text-muted);">
+                  Colectivo: <strong style="color: var(--text-main);">{m.target_groups}</strong>
+                </div>
+              </td>
+              
+              <!-- Enlaces -->
+              <td style="padding: 1.5rem 1rem; vertical-align: top; text-align: right;">
+                <a href={`/partido/${m.party_slug}`} class="cyber-btn" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; display: inline-block; margin-bottom: 0.25rem;">
+                  Programa
+                </a>
+                <span style="font-size: 0.7rem; color: var(--text-muted); display: block;">pág. {m.source_page}</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- VISTA MÓVIL: Apilado de Tarjetas Cyberpunk -->
+    <div id="mobile-cards-container" style="display: flex; flex-direction: column; gap: 1rem; margin-bottom: 2rem;">
+      {measures.map(m => (
+        <div class="cyber-card mobile-comparison-card" data-area={m.area} style="padding: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem; border-color: rgba(255,255,255,0.05);">
+          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+            <span class={`party-badge ${m.party_slug}`} style="font-weight: 800; font-size: 0.7rem; text-transform: uppercase; padding: 0.15rem 0.4rem; border-radius: 4px;">
+              {m.party_name}
+            </span>
+            <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">{m.current_leader}</span>
+          </div>
+
+          <div>
+            <div style="background: rgba(0,0,0,0.15); border-left: 2px solid var(--border-color); padding: 0.5rem; font-style: italic; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.5rem;">
+              "{m.original_text}"
+            </div>
+            <strong style="color: var(--neon-blue); font-size: 0.7rem; text-transform: uppercase; display: block; margin-bottom: 0.15rem;">En lenguaje sencillo:</strong>
+            <p style="font-size: 0.8rem; color: var(--text-main); margin: 0; line-height: 1.4;">
+              {m.plain_language_summary}
+            </p>
+          </div>
+
+          <div style="background: rgba(157, 78, 221, 0.03); border: 1px solid rgba(157, 78, 221, 0.1); border-radius: 8px; padding: 0.75rem;">
+            <strong style="color: var(--neon-purple); font-size: 0.7rem; text-transform: uppercase; display: block; margin-bottom: 0.15rem;">Impacto Estimado:</strong>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0; line-height: 1.4;">
+              {m.possible_impact}
+            </p>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; border-top: 1px solid var(--border-color); padding-top: 0.5rem; color: var(--text-muted);">
+            <span>Fuente: Programa electoral, pág. {m.source_page}</span>
+            <a href={`/partido/${m.party_slug}`} style="color: var(--neon-blue); font-weight: 700; text-decoration: none;">
+              Ficha &rarr;
+            </a>
+          </div>
+        </div>
+      ))}
+    </div>
+
+    <!-- Perfiles de votante (Tarjetas de navegación rápida) -->
+    <section style="margin-top: 3rem; margin-bottom: 2rem;">
+      <h2 style="font-size: 1.4rem; border-bottom: 2px solid var(--border-color); padding-bottom: 0.5rem; margin-bottom: 1.5rem; text-align: center; font-family: var(--font-title); font-weight: 800;">
+        👤 ¿Cómo te afecta según tu perfil?
+      </h2>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
+        
+        <div class="cyber-card green" style="padding: 1.25rem;">
+          <h3 style="color: var(--neon-green); font-size: 1.1rem; margin-bottom: 0.5rem; font-family: var(--font-title);">Si eres JOVEN</h3>
+          <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 1rem; line-height: 1.45;">
+            El acceso a la vivienda es tu principal foco. Te afecta el plan de avales públicos de hipotecas del 20% (PSOE/PP) frente al tope de precios de alquileres y aumento de vivienda social (Sumar) o la desregulación de suelo urbanizable (VOX).
+          </p>
+          <button onclick="filterByArea('Vivienda')" class="cyber-btn" style="width: 100%; font-size: 0.75rem; padding: 0.5rem 1rem;">
+            Ver Medidas Vivienda
+          </button>
+        </div>
+
+        <div class="cyber-card purple" style="padding: 1.25rem;">
+          <h3 style="color: var(--neon-purple); font-size: 1.1rem; margin-bottom: 0.5rem; font-family: var(--font-title);">Si eres AUTÓNOMO</h3>
+          <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 1rem; line-height: 1.45;">
+            Las cargas de cotizaciones y la burocracia son clave. Las reformas fiscales del IVA, la cuota progresiva por ingresos y las deducciones a la inversión cambian según el partido y sus acuerdos en el Parlamento.
+          </p>
+          <button onclick="filterByArea('Fiscalidad')" class="cyber-btn" style="width: 100%; font-size: 0.75rem; padding: 0.5rem 1rem;">
+            Ver Medidas Fiscales
+          </button>
+        </div>
+
+        <div class="cyber-card amber" style="padding: 1.25rem;">
+          <h3 style="color: var(--neon-amber); font-size: 1.1rem; margin-bottom: 0.5rem; font-family: var(--font-title);">Si eres INQUILINO</h3>
+          <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 1rem; line-height: 1.45;">
+            El precio del alquiler de viviendas en las zonas tensionadas de las ciudades. Compara el mantenimiento estricto de topes de alquiler (PSOE/Sumar) frente a la derogación de la ley para liberalizar el mercado (PP/VOX).
+          </p>
+          <button onclick="filterByArea('Vivienda')" class="cyber-btn" style="width: 100%; font-size: 0.75rem; padding: 0.5rem 1rem;">
+            Ver Medidas Alquiler
+          </button>
+        </div>
+
+      </div>
+    </section>
+
+  </div>
+</Layout>
+
+<script is:inline>
+  // Lógica de filtrado en el cliente para la tabla y las tarjetas
+  const buttons = document.querySelectorAll('#area-filters button');
+  const rows = document.querySelectorAll('#comparison-rows tr');
+  const mobileCards = document.querySelectorAll('#mobile-cards-container .mobile-comparison-card');
+
+  window.filterByArea = function(area) {
+    // Actualizar botones activos
+    buttons.forEach(btn => {
+      if (btn.getAttribute('data-area') === area) {
+        btn.classList.add('active', 'accent');
+      } else {
+        btn.classList.remove('active', 'accent');
+      }
+    });
+
+    // Mostrar/ocultar filas correspondientes en la tabla de escritorio
+    rows.forEach(row => {
+      const rowArea = row.getAttribute('data-area');
+      if (rowArea === area) {
+        row.style.display = 'table-row';
+      } else {
+        row.style.display = 'none';
+      }
+    });
+
+    // Mostrar/ocultar tarjetas en la vista de móvil
+    mobileCards.forEach(card => {
+      const cardArea = card.getAttribute('data-area');
+      if (cardArea === area) {
+        card.style.display = 'flex';
+      } else {
+        card.style.display = 'none';
+      }
+    });
+  }
+
+  // Escuchar clicks de botones de filtrado
+  buttons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const area = btn.getAttribute('data-area');
+      window.filterByArea(area);
+    });
+  });
+
+  // Inicializar mostrando la primera área disponible
+  if (buttons.length > 0) {
+    const firstArea = buttons[0].getAttribute('data-area');
+    window.filterByArea(firstArea);
+  }
+</script>
+
+<style>
+  /* Clases para resaltar los botones activos */
+  .cyber-btn.active.accent {
+    background: var(--neon-blue) !important;
+    color: var(--bg-dark) !important;
+    border-color: var(--bg-dark) !important;
+  }
+  
+  tr.comparison-row:hover {
+    background-color: rgba(36, 47, 71, 0.2);
+  }
+
+  /* Badges de partidos */
+  .party-badge {
+    color: #fff;
+  }
+  .party-badge.pp { background: #002e80; border: 1px solid #0056f6; }
+  .party-badge.psoe { background: #800000; border: 1px solid #ff0000; }
+  .party-badge.vox { background: #244d00; border: 1px solid #4dff00; }
+  .party-badge.sumar { background: #4a004a; border: 1px solid #ff00ff; }
+
+  /* Estilos responsivos de visibilidad */
+  @media (min-width: 769px) {
+    #mobile-cards-container {
+      display: none !important;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .table-desktop-container {
+      display: none !important;
+    }
+  }
+</style>

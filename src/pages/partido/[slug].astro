@@ -1,0 +1,213 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { getDatabase } from '../../lib/db.js';
+import path from 'node:path';
+
+export async function getStaticPaths() {
+    const db = getDatabase();
+  const parties = db.prepare("SELECT slug FROM parties").all() as any[];
+  db.close();
+
+  return parties.map(p => ({
+    params: { slug: p.slug }
+  }));
+}
+
+const { slug } = Astro.params;
+
+const db = getDatabase();
+
+// Cargar información del partido
+const party = db.prepare("SELECT * FROM parties WHERE slug = ?").get(slug) as any;
+
+// Cargar medidas del programa
+const measures = db.prepare(`
+  SELECT pm.*, ep.election_name
+  FROM policy_measures pm
+  LEFT JOIN electoral_programs ep ON pm.program_id = ep.id
+  WHERE pm.party_id = ?
+`).all(party.id) as any[];
+
+// Cargar promesas de seguimiento
+const promises = db.prepare("SELECT * FROM promise_tracking WHERE party_id = ?").all(party.id) as any[];
+
+// Cargar declaración de bienes de líderes
+const assets = db.prepare("SELECT * FROM asset_declarations WHERE party_id = ?").all(party.id) as any[];
+
+db.close();
+---
+
+<Layout title={`Propuestas de ${party.name}`} description={`Análisis detallado de las medidas, promesas y bienes declarados del partido ${party.name}.`}>
+  <div class="container">
+
+    <!-- Miga de Pan -->
+    <div style="margin-bottom: 1.5rem; font-size: 0.9rem; color: var(--text-muted);">
+      <a href="/" class="nav-link">Portada</a> / <a href="/programas-politicos" class="nav-link">Partidos</a> / <span style="color: var(--neon-blue);">{party.name}</span>
+    </div>
+
+    <!-- Cabecera del Partido -->
+    <section style="margin-bottom: 3rem;">
+      <div class="cyber-card blue" style="padding: 2.5rem; background: linear-gradient(135deg, var(--bg-card), #0f1624);">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; border-bottom: 2px solid var(--border-color); padding-bottom: 1rem; margin-bottom: 1.5rem;">
+          <div>
+            <h1 style="font-size: 2.5rem; line-height: 1.1;">{party.name}</h1>
+            <span style="color: var(--text-muted); font-size: 0.95rem;">Líder actual: <strong>{party.current_leader}</strong></span>
+          </div>
+          <span style="color: var(--neon-blue); font-weight: 800; font-size: 1.2rem; border: 2px solid var(--neon-blue); padding: 0.25rem 0.75rem; border-radius: 4px; font-family: var(--font-title);">
+            {party.slug.toUpperCase()}
+          </span>
+        </div>
+
+        <p style="font-size: 1.15rem; color: var(--text-muted); max-width: 900px; margin-bottom: 1rem;">
+          <strong>Ideología declarada:</strong> {party.ideology_summary}
+        </p>
+
+        {party.official_website && (
+          <a href={party.official_website} target="_blank" rel="noopener noreferrer" style="color: var(--neon-blue); font-weight: bold; text-decoration: underline;">
+            Visitar sitio web oficial ↗
+          </a>
+        )}
+      </div>
+    </section>
+
+    <!-- Propuestas por áreas -->
+    <section style="margin-bottom: 4rem;">
+      <h2 style="font-size: 1.6rem; border-bottom: 2px solid var(--border-color); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">
+         Medidas Destacadas del Programa
+      </h2>
+
+      <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+        {measures.map(m => (
+          <div class="cyber-card" style="padding: 1.75rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem;">
+              <span style="background: var(--border-color); color: var(--text-muted); font-size: 0.75rem; font-weight: 800; padding: 0.2rem 0.5rem; text-transform: uppercase;">
+                Sector: {m.area}
+              </span>
+              <span style="color: var(--text-muted); font-size: 0.8rem;">
+                Fuente: pág. {m.source_page} ({m.election_name || 'Programa'})
+              </span>
+            </div>
+
+            <h3 style="font-size: 1.3rem; margin-bottom: 0.5rem; color: var(--text-main);">{m.title}</h3>
+
+            <div style="background: rgba(0,0,0,0.1); padding: 0.75rem; border-left: 3px solid var(--border-color); font-size: 0.85rem; font-style: italic; color: var(--text-muted); margin-bottom: 1rem;">
+              <strong>Cita original:</strong> "{m.original_text}"
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
+              <div>
+                <strong style="color: var(--neon-blue); font-size: 0.9rem; display: block; margin-bottom: 0.25rem;">Explicación clara:</strong>
+                <p style="font-size: 0.9rem; color: var(--text-muted);">{m.plain_language_summary}</p>
+              </div>
+              <div>
+                <strong style="color: var(--neon-purple); font-size: 0.9rem; display: block; margin-bottom: 0.25rem;">Impacto potencial:</strong>
+                <p style="font-size: 0.9rem; color: var(--text-muted);">{m.possible_impact}</p>
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {measures.length === 0 && (
+          <p style="color: var(--text-muted); text-align: center; padding: 2rem;">No hay medidas registradas para este partido.</p>
+        )}
+      </div>
+    </section>
+
+    <!-- Seguimiento de Promesas y Hechos (BOE/Votos) -->
+    <section style="margin-bottom: 4rem;">
+      <h2 style="font-size: 1.6rem; border-bottom: 2px solid var(--border-color); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">
+         Promesas vs Hechos (Seguimiento Oficial)
+      </h2>
+
+      <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+        {promises.map(p => {
+          const getStatusColor = (status) => {
+            const s = status.toLowerCase();
+            if (s.includes('aprobado') || s.includes('cumplido')) return 'green';
+            if (s.includes('bloqueado') || s.includes('incumplido')) return 'rose';
+            return 'amber';
+          };
+
+          return (
+            <div class={`cyber-card ${getStatusColor(p.status)}`} style="padding: 1.5rem;">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem;">
+                <span class={`verdict-badge ${p.status.toLowerCase().replace(/\s+/g, '-')}`} style="font-size: 0.75rem;">
+                  {p.status}
+                </span>
+                <span style="color: var(--text-muted); font-size: 0.8rem;">Ámbito: {p.government_level}</span>
+              </div>
+
+              <h3 style="font-size: 1.2rem; margin-bottom: 0.5rem;">"{p.promise_text}"</h3>
+              <p style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 1rem;">
+                <strong>Acción real:</strong> {p.action_taken}
+              </p>
+
+              {p.evidence_url && (
+                <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border-color); padding-top: 0.5rem; font-size: 0.8rem; color: var(--text-muted);">
+                  <span>Evidencia: {p.evidence_summary}</span>
+                  <a href={p.evidence_url} target="_blank" rel="noopener noreferrer" style="color: var(--neon-blue); text-decoration: underline; font-weight: bold;">
+                    Ver documento oficial ↗
+                  </a>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {promises.length === 0 && (
+          <p style="color: var(--text-muted); text-align: center; padding: 2rem;">No hay seguimiento de promesas de gobernación en esta ficha.</p>
+        )}
+      </div>
+    </section>
+
+    <!-- Declaración de bienes de sus líderes -->
+    <section style="margin-bottom: 4rem;">
+      <h2 style="font-size: 1.6rem; border-bottom: 2px solid var(--border-color); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">
+        💼 Declaración de Patrimonio (Cargos Públicos)
+      </h2>
+
+      <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+        {assets.map(ad => (
+          <div class="cyber-card purple" style="padding: 1.75rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem; margin-bottom: 1rem;">
+              <div>
+                <h3 style="font-size: 1.3rem; color: var(--text-main);">{ad.person_name}</h3>
+                <span style="color: var(--text-muted); font-size: 0.85rem;">Cargo: {ad.role}</span>
+              </div>
+              <span style="color: var(--neon-purple); font-size: 0.8rem; font-family: monospace;">
+                Fecha: {ad.date_declared}
+              </span>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1rem;">
+              <div>
+                <strong style="color: var(--neon-green); font-size: 0.9rem; display: block; margin-bottom: 0.25rem;">Activos y Bienes declarados:</strong>
+                <p style="font-size: 0.9rem; color: var(--text-muted);">{ad.declared_assets_summary}</p>
+              </div>
+              <div>
+                <strong style="color: var(--neon-rose); font-size: 0.9rem; display: block; margin-bottom: 0.25rem;">Deudas y Pasivos:</strong>
+                <p style="font-size: 0.9rem; color: var(--text-muted);">{ad.declared_debts_summary}</p>
+              </div>
+            </div>
+
+            {ad.source_url && (
+              <div style="border-top: 1px solid var(--border-color); padding-top: 0.75rem; display: flex; align-items: center; justify-content: space-between; font-size: 0.8rem; color: var(--text-muted);">
+                <span>Nota: {ad.notes}</span>
+                <a href={ad.source_url} target="_blank" rel="noopener noreferrer" style="color: var(--neon-blue); text-decoration: underline; font-weight: bold;">
+                  Declaración oficial firmada (Congreso/Transparencia) ↗
+                </a>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+
+  </div>
+</Layout>
+
+<style>
+  .nav-link:hover {
+    color: var(--neon-blue) !important;
+  }
+</style>

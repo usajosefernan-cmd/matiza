@@ -1,0 +1,705 @@
+---
+export const prerender = true;
+import fs from 'node:fs';
+import path from 'node:path';
+import Layout from '../../layouts/Layout.astro';
+import ShareBar from '../../components/ShareBar.astro';
+import { getDatabase } from '../../lib/db.js';
+
+export async function getStaticPaths() {
+  const db = getDatabase();
+  const articles = db.prepare("SELECT slug FROM articles WHERE status = 'publicado'").all();
+  db.close();
+
+  const paths = articles.map(art => ({
+    params: { slug: art.slug }
+  }));
+
+  // Buscar archivos JSON dinámicos que empiecen por "articulo_" en el directorio raíz de matizame
+  const projectRoot = path.resolve('.');
+  
+  try {
+    const files = fs.readdirSync(projectRoot);
+    files.forEach(file => {
+      if (file.startsWith('articulo_') && file.endsWith('.json')) {
+        const slug = file.replace('articulo_', '').replace('.json', '').replace(/_/g, '-');
+        paths.push({ params: { slug } });
+      }
+    });
+  } catch (err) {
+    console.warn('[Static Paths] Error al escanear archivos JSON locales:', err.message);
+  }
+
+  return paths;
+}
+
+const { slug } = Astro.params;
+const db = getDatabase();
+
+let article = null;
+let articleTopics = [] as any[];
+let sources = [] as any[];
+let socialPosts = [] as any[];
+let tags = [] as any[];
+
+// 1. Intentar cargar de la base de datos
+try {
+  article = db.prepare(`
+    SELECT a.*, t.title as topic_title, t.slug as topic_slug
+    FROM articles a
+    LEFT JOIN topics t ON a.topic_id = t.id
+    WHERE a.slug = ? AND a.status = 'publicado'
+  `).get(slug) as any;
+} catch (e) {
+  console.warn('[DB Load] Error al leer artículo:', e.message);
+}
+
+// 2. Si no se encuentra en DB, buscar el archivo JSON de forma dinámica
+if (!article) {
+  import fs from 'node:fs';
+  import path from 'node:path';
+  const normalizedSlug = slug.replace(/-/g, '_');
+  const jsonPath = path.resolve(`articulo_${normalizedSlug}.json`);
+  
+  if (fs.existsSync(jsonPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+      
+      article = {
+        id: data.id || `json-${slug}`,
+        title: data.title,
+        subtitle: data.subtitle,
+        claim: data.infoData?.claim || data.claim || '',
+        origin_platform: data.infoData?.platform || 'YouTube',
+        origin_url: data.infoData?.url || 'https://www.youtube.com',
+        origin_summary: data.summary,
+        category: data.category || 'Economía',
+        verdict: data.extended?.verdict || data.verdict || 'Falta contexto',
+        confidence: data.confidence || 'Alta',
+        summary: data.summary,
+        explanation: data.explanation,
+        what_is_true: data.extended?.what_is_true || data.what_is_true || '',
+        what_is_false: data.extended?.what_is_false || data.what_is_false || '',
+        what_lacks_context: data.extended?.what_lacks_context || data.what_lacks_context || '',
+        what_is_not_proven: data.extended?.what_is_not_proven || data.what_is_not_proven || '',
+        trick_used: data.trick_used || 'cherry-picking',
+        matiza_score: data.matiza_score || 50,
+        emoji_tag: data.emoji_tag || '🧊 Falta contexto',
+        infographic_svg: data.infographic_svg || null,
+        multimedia_url: data.multimedia_url || 'https://images.unsplash.com/photo-1541872703-74c5e44368f9?q=80&w=390&auto=format&fit=crop',
+        published_at: new Date().toISOString()
+      };
+      
+      articleTopics.push({ title: 'Economía y Sociedad', slug: 'economia-y-sociedad' });
+      
+      if (data.infoData?.sources) {
+        sources = data.infoData.sources.map((s, idx) => ({
+          id: `src-json-${idx}`,
+          title: s,
+          url: 'https://www.boe.es',
+          source_type: 'oficial'
+        }));
+      }
+
+      const rawTags = data.tags || ['José Elías', 'Juventud', 'Vivienda', 'Emprendimiento'];
+      tags = rawTags.map(t => ({
+        name: t,
+        slug: t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-')
+      }));
+      
+    } catch (err) {
+      console.error('[JSON Load] Error parsing JSON file:', err.message);
+    }
+  }
+}
+
+if (!article) {
+  db.close();
+  return Astro.redirect('/404');
+}
+
+// Cargar el resto de relaciones si se leyó de la base de datos
+if (article && !article.id.startsWith('json-')) {
+  articleTopics = db.prepare(`
+    SELECT t.title, t.slug
+    FROM article_topics at
+    JOIN topics t ON at.topic_id = t.id
+    WHERE at.article_id = ? AND t.status = 'activo'
+  `).all(article.id) as any[];
+
+  if (articleTopics.length === 0 && article.topic_title) {
+    articleTopics.push({ title: article.topic_title, slug: article.topic_slug });
+  }
+
+  sources = db.prepare("SELECT * FROM sources WHERE article_id = ?").all(article.id) as any[];
+  socialPosts = db.prepare("SELECT * FROM social_posts WHERE article_id = ?").all(article.id) as any[];
+  
+  tags = db.prepare(`
+    SELECT t.name, t.slug
+    FROM tags t
+    JOIN article_tags at ON t.id = at.tag_id
+    WHERE at.article_id = ?
+  `).all(article.id) as any[];
+}
+
+// Cargar artículos relacionados precalculados
+let precalculatedRelated = [] as any[];
+if (article && article.related_ids) {
+  try {
+    const relatedIds = JSON.parse(article.related_ids) as string[];
+    if (relatedIds.length > 0) {
+      const placeholders = relatedIds.map(() => '?').join(',');
+      precalculatedRelated = db.prepare(`
+        SELECT * FROM articles
+        WHERE id IN (${placeholders}) AND status = 'publicado'
+      `).all(...relatedIds) as any[];
+    }
+  } catch (e) {
+    console.warn("Error al cargar related_ids:", e);
+  }
+}
+
+// Separar en mismo tema y otros temas
+let relatedSameTopic = precalculatedRelated.filter(art => art.topic_id === article.topic_id).slice(0, 2);
+let relatedOtherTopics = precalculatedRelated.filter(art => art.topic_id !== article.topic_id).slice(0, 2);
+
+// Fallback si no hay suficientes
+if (relatedSameTopic.length === 0 && article) {
+  relatedSameTopic = db.prepare(`
+    SELECT * FROM articles
+    WHERE topic_id = ? AND id != ? AND status = 'publicado'
+    ORDER BY published_at DESC
+    LIMIT 2
+  `).all(article.topic_id, article.id) as any[];
+}
+if (relatedOtherTopics.length === 0 && article) {
+  relatedOtherTopics = db.prepare(`
+    SELECT * FROM articles
+    WHERE topic_id != ? AND status = 'publicado'
+    ORDER BY published_at DESC
+    LIMIT 2
+  `).all(article.topic_id) as any[];
+}
+
+// Cargar item del radar correspondiente para extraer métricas y scores reales (código cero simulador)
+const scrapedItem = db.prepare("SELECT metrics_json, virality_score, risk_score FROM scraped_items WHERE url = ?").get(article.origin_url) as any;
+
+db.close();
+
+// Extraer YouTube ID directamente de forma blindada para el reproductor de video
+let directYoutubeId = '';
+if (article && article.origin_url) {
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=|\/shorts\/)([^#\&\?]*).*/;
+  const match = article.origin_url.match(regExp);
+  if (match && match[2].length === 11) {
+    directYoutubeId = match[2];
+  }
+}
+
+// Extraer TikTok Video ID si es aplicable
+let tiktokVideoId = '';
+if (article && article.origin_url && (article.origin_platform === 'TikTok' || article.origin_url.includes('tiktok.com'))) {
+  const match = article.origin_url.match(/\/video\/(\d+)/);
+  if (match) {
+    tiktokVideoId = match[1];
+  }
+}
+
+const base = import.meta.env.BASE_URL;
+const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base;
+
+let realMetrics = { likes: null, reposts: null, comments: null, views: null };
+if (scrapedItem && scrapedItem.metrics_json) {
+  try {
+    const parsed = JSON.parse(scrapedItem.metrics_json);
+    realMetrics.likes = parsed.likes || parsed.likeCount || parsed.likes_count || null;
+    realMetrics.reposts = parsed.reposts || parsed.retweetCount || parsed.shareCount || parsed.reposts_count || null;
+    realMetrics.comments = parsed.comments || parsed.commentCount || parsed.comments_count || null;
+    realMetrics.views = parsed.views || parsed.viewCount || parsed.views_count || null;
+  } catch (e) {}
+}
+
+const getVerdictClass = (verdict) => {
+  const v = (verdict || '').toLowerCase();
+  if (v.includes('verdadero')) return 'green';
+  if (v.includes('falso')) return 'rose';
+  if (v.includes('engañoso') || v.includes('contexto')) return 'amber';
+  return 'purple';
+};
+
+const verdictClass = getVerdictClass(article.verdict);
+const bannerColors = {
+  green: { bg: 'rgba(0, 245, 160, 0.15)', border: 'var(--neon-green)' },
+  rose: { bg: 'rgba(220, 39, 67, 0.15)', border: 'var(--neon-rose)' },
+  amber: { bg: 'rgba(255, 183, 3, 0.15)', border: 'var(--neon-amber)' },
+  purple: { bg: 'rgba(157, 78, 221, 0.15)', border: 'var(--neon-purple)' }
+};
+const bannerColor = bannerColors[verdictClass] || bannerColors.purple;
+
+function getRelativeTime(dateString) {
+  if (!dateString) return 'hace un momento';
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  if (isNaN(diffMs)) return 'hace un momento';
+  const diffMin = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffMin === 0) return 'hace unos segundos';
+  if (diffMin <= 59) return `hace ${diffMin} min`;
+  if (diffHours <= 23) return `hace ${diffHours} h`;
+  return `hace ${diffDays} días`;
+}
+
+function formatOriginalDate(dateString) {
+  if (!dateString) return 'Reciente';
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return dateString;
+  return date.toLocaleDateString('es-ES', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+// Mapa de veredicto a color
+const trickUsed = (article.trick_used || '').toLowerCase();
+let trickDesc = 'Se utilizan afirmaciones genéricas descontextualizadas del marco legal oficial del BOE o del INE para generar desinformación.';
+if (trickUsed === 'cherry-picking') {
+  trickDesc = 'Se seleccionan únicamente datos parciales o favorables al sesgo para omitir el contexto general completo que desmiente la afirmación.';
+} else if (trickUsed === 'falso dilema') {
+  trickDesc = 'Se presenta la situación como si solo existieran dos opciones extremas excluyentes, ocultando la existencia de matices intermedios o terceras vías jurídicas.';
+} else if (trickUsed === 'culpa colectiva') {
+  trickDesc = 'Se atribuye a todo un grupo social (por origen, nacionalidad o religión) la responsabilidad directa o indirecta por el acto delictivo de un individuo aislado.';
+} else if (trickUsed === 'dato sin base') {
+  trickDesc = 'Se lanzan porcentajes alarmantes o cifras absolutas elevadas sin contextualizar la base demográfica, el denominador o el marco de comparación estadística real.';
+} else if (trickUsed === 'vídeo recortado') {
+  trickDesc = 'Se extrae un fragmento de audio o vídeo de pocos segundos para descontextualizar las declaraciones completas o la fecha real del suceso.';
+} else if (trickUsed === 'autoridad falsa') {
+  trickDesc = 'Se atribuye la información a supuestos portales de investigación, expertos autodeclarados o fuentes no oficiales para forzar veracidad.';
+} else if (trickUsed === 'miedo/urgencia') {
+  trickDesc = 'Se recurre a llamadas de pánico moral o urgencia ("lo ocultan", "secreto", "últimas unidades") para activar una creencia emocional irracional.';
+} else if (trickUsed === 'promoción encubierta') {
+  trickDesc = 'Se recomienda un producto o inversión con enlaces de referidos camuflados de recomendación sincera, ocultando el incentivo económico detrás.';
+}
+
+// Formateador Markdown a HTML estructurado
+function renderMarkdown(md) {
+  if (!md) return '';
+  let html = md;
+  // Escapar HTML básico
+  html = html
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Convertir cabeceras
+  html = html.replace(/^### (.*?)$/gm, '<h3 style="font-size: 1.15rem; font-weight: 800; color: #ffffff; margin-top: 1.5rem; margin-bottom: 0.5rem; font-family: var(--font-title); letter-spacing: -0.02em;">$1</h3>');
+  html = html.replace(/^#### (.*?)$/gm, '<h4 style="font-size: 1.0rem; font-weight: 800; color: var(--neon-blue); margin-top: 1.25rem; margin-bottom: 0.5rem; font-family: var(--font-title);">$1</h4>');
+
+  // Convertir negritas (**texto**)
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong style="color: #ffffff; font-weight: 700;">$1</strong>');
+
+  // Convertir cursivas (*texto*)
+  html = html.replace(/\*(.*?)\*/g, '<em style="font-style: italic;">$1</em>');
+
+  // Convertir listas con guiones
+  html = html.replace(/^- (.*?)$/gm, '<li style="margin-left: 1.25rem; list-style-type: square; margin-bottom: 0.35rem; color: var(--text-muted);">$1</li>');
+
+  // Convertir saltos de línea dobles en párrafos
+  const paragraphs = html.split(/\n\s*\n/);
+  html = paragraphs.map(p => {
+    const trimmed = p.trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('<h3') || trimmed.startsWith('<h4') || trimmed.startsWith('<li')) {
+      return trimmed;
+    }
+    return `<p style="margin-bottom: 1rem; line-height: 1.65; color: #E2E8F0;">${trimmed}</p>`;
+  }).join('\n');
+
+  return html;
+}
+---
+
+<Layout title={article.title} description={article.subtitle} category={article.category}>
+  <div class="container" style="padding-top: 1.5rem; padding-bottom: 5rem; max-width: 680px; margin: 0 auto;">
+
+    <!-- Migas de pan cyberpunk -->
+    <div style="margin-bottom: 1.5rem; font-size: 0.8rem; color: var(--text-muted); font-weight: 700; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+      <a href="/" style="text-decoration: none; color: var(--text-muted); transition: color 0.2s;" class="nav-link">Radar</a>
+      <span style="color: rgba(255,255,255,0.15);">/</span>
+      <a href="/temas" style="text-decoration: none; color: var(--text-muted); transition: color 0.2s;" class="nav-link">Expedientes</a>
+      <span style="color: rgba(255,255,255,0.15);">/</span>
+      {articleTopics.map((topic, tIdx) => (
+        <span style="display: inline-flex; align-items: center; gap: 0.25rem; margin-right: 0.25rem;">
+          {tIdx > 0 && <span style="color: rgba(255,255,255,0.15);">+</span>}
+          <a href={`/tema/${topic.slug}`} style="text-decoration: none; color: var(--neon-blue); font-weight: 800;" class="hover-link">{topic.title}</a>
+        </span>
+      ))}
+    </div>
+
+    <!-- Título principal elegante (Igual que la Web) -->
+    <header style="margin-bottom: 2rem; text-align: center;">
+      <h1 style="font-size: 2.2rem; line-height: 1.2; font-weight: 900; color: #ffffff; font-family: var(--font-title); margin-bottom: 0.5rem; letter-spacing: -0.03em;">
+        {article.title}
+      </h1>
+      <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.15em; color: var(--text-muted); font-weight: bold; margin-top: 0.75rem;">
+        {article.category.toUpperCase()} • IMPACTO SOCIAL VERIFICADO
+      </div>
+
+      <!-- Tags Cyberpunk en Cabecera -->
+      {tags.length > 0 && (
+        <div style="margin-top: 1rem; display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap;">
+          {tags.map(t => (
+            <a href={`/tag/${t.slug}`} style="text-decoration: none; font-size: 0.7rem; font-family: monospace; font-weight: 800; color: var(--neon-blue); background: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0, 240, 255, 0.2); padding: 0.2rem 0.55rem; border-radius: 4px; transition: all 0.2s;" class="hover-link">
+              #{t.name}
+            </a>
+          ))}
+        </div>
+      )}
+    </header>
+
+    <!-- Caja de Origen de la Publicación y Captura Real -->
+    {article.origin_url && (
+      <div class="cyber-card origin-card" style="padding: 1.2rem; background: rgba(18, 22, 41, 0.35); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 12px; margin-bottom: 2rem; display: grid; grid-template-columns: 1fr auto; gap: 1.5rem; align-items: center;">
+        <div style="text-align: left;">
+          <span style="font-size: 0.65rem; font-weight: 800; text-transform: uppercase; color: var(--neon-rose); display: block; margin-bottom: 0.4rem; letter-spacing: 0.08em; font-family: monospace;">
+            🚨 ORIGEN DE LA DECLARACIÓN DETECTADA:
+          </span>
+          <p style="font-size: 0.88rem; margin: 0 0 0.75rem 0; line-height: 1.5; color: var(--text-muted); font-style: italic;">
+            "{article.claim || 'Publicación en redes sociales.'}"
+          </p>
+          <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+            <span>Plataforma: <strong style="color: #fff;">{article.origin_platform || 'Instagram'}</strong></span>
+            <span style="color: rgba(255,255,255,0.15);">|</span>
+            <a href={article.origin_url} target="_blank" rel="noopener noreferrer" style="color: var(--neon-blue); text-decoration: underline; font-weight: 800; display: inline-flex; align-items: center; gap: 0.25rem;" class="hover-link">
+              Ver post original en {article.origin_platform || 'Instagram'}
+              <svg style="width: 12px; height: 12px;" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+              </svg>
+            </a>
+          </div>
+        </div>
+        {article.multimedia_url && !article.multimedia_url.includes('unsplash.com/photo-1541872703-74c5e44368f9') && (
+          <div class="origin-card-img" style="width: 80px; height: 80px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); overflow: hidden; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+            <img src={article.multimedia_url} alt="Captura original" style="max-width: 100%; max-height: 100%; object-fit: cover;" />
+          </div>
+        )}
+      </div>
+    )}
+
+    <!-- Portada Multimedia / Captura de Vídeo del Artículo -->
+    {article.multimedia_url && !article.multimedia_url.includes('unsplash.com/photo-1541872703-74c5e44368f9') && (
+      <div style="margin-bottom: 2rem; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); background: #000; box-shadow: 0 8px 30px rgba(0,0,0,0.5);">
+        <img src={article.multimedia_url} alt="Evidencia o captura original del debate" style="width: 100%; height: auto; max-height: 380px; object-fit: cover; display: block;" />
+      </div>
+    )}
+
+    <!-- Gran Banner de Veredicto Sólido -->
+    <div style="margin-bottom: 1.5rem; text-align: center;">
+      <div class={`verdict-banner ${article.verdict.toLowerCase().replace(' ', '-')}`} style={`display: inline-block; width: 100%; padding: 1.2rem; border-radius: 12px; font-size: 1.7rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05em; font-family: var(--font-title); text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.3); color: #ffffff; background: ${bannerColor.bg}; border: 2px solid ${bannerColor.border};`}>
+        {article.verdict}
+      </div>
+    </div>
+
+    <!-- Barra de Compartir Tras Veredicto (Inline) -->
+    <div style="margin-bottom: 2rem;">
+      <ShareBar
+        title={article.title}
+        text={`MATIZA califica de ${article.verdict.toLowerCase()} la declaración: "${article.claim}"`}
+        variant="inline"
+        label="Compartir este desmentido"
+      />
+    </div>
+
+    <!-- Panel: Conclusión de la Auditoría -->
+    <div class="cyber-card" style="padding: 1.5rem; background: rgba(18, 22, 41, 0.35); border-color: rgba(255,255,255,0.06); border-radius: 12px; margin-bottom: 1.5rem;">
+      <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; color: #ffffff; font-family: var(--font-title); font-size: 0.85rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;">
+        <svg style="width: 18px; height: 18px; color: var(--neon-blue);" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+        </svg>
+        <span>Conclusión de la Auditoría</span>
+      </div>
+      <p style="font-size: 0.95rem; color: var(--text-muted); line-height: 1.6; margin: 0; font-weight: 500;">
+        {article.summary || article.explanation.substring(0, 200) + '...'}
+      </p>
+    </div>
+
+    <!-- Panel: El Truco -->
+    <div class="cyber-card" style="padding: 1.5rem; background: rgba(18, 22, 41, 0.35); border-color: rgba(255,255,255,0.06); border-radius: 12px; margin-bottom: 2rem;">
+      <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; color: #ffffff; font-family: var(--font-title); font-size: 0.85rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;">
+        <svg style="width: 18px; height: 18px; color: var(--neon-purple);" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+        </svg>
+        <span>El Truco</span>
+      </div>
+      <span style="background: rgba(157, 78, 221, 0.12); color: var(--neon-purple); border: 1px solid rgba(157, 78, 221, 0.25); font-size: 0.65rem; font-weight: 800; padding: 0.2rem 0.5rem; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.05em; font-family: monospace; display: inline-block; margin-bottom: 0.75rem;">
+        {article.trick_used ? article.trick_used.toUpperCase() : 'SESGO DE DATOS'}
+      </span>
+      <p style="font-size: 0.95rem; color: var(--text-muted); line-height: 1.6; margin: 0;">
+        {trickDesc}
+      </p>
+    </div>
+
+    <!-- PANELES COMPARATIVOS DIRECTOS: EL MITO vs EL HECHO REAL -->
+    <div style="display: flex; flex-direction: column; gap: 1.25rem; margin-bottom: 2.5rem;">
+      <!-- EL MITO (Borde Rojo / Rosa) -->
+      <div class="cyber-card" style="padding: 1.5rem; border: 1px solid rgba(220, 39, 67, 0.25); background: rgba(220, 39, 67, 0.02); border-radius: 12px;">
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; color: var(--neon-rose); font-family: var(--font-title); font-size: 0.8rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05em;">
+          <svg style="width: 16px; height: 16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+          </svg>
+          <span>EL MITO</span>
+        </div>
+        <p style="font-size: 1.05rem; color: #ffffff; font-weight: 600; line-height: 1.5; margin: 0; font-style: italic;">
+          "{article.claim}"
+        </p>
+      </div>
+
+      <!-- EL HECHO REAL (Borde Azul / Verde) -->
+      <div class="cyber-card" style="padding: 1.5rem; border: 1px solid rgba(0, 240, 255, 0.25); background: rgba(0, 240, 255, 0.02); border-radius: 12px;">
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; color: var(--neon-blue); font-family: var(--font-title); font-size: 0.8rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05em;">
+          <svg style="width: 16px; height: 16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+          </svg>
+          <span>EL HECHO REAL</span>
+        </div>
+        <p style="font-size: 1.05rem; color: #ffffff; line-height: 1.5; margin: 0;">
+          {article.what_is_true || "Los datos oficiales comparados desmienten las afirmaciones sin base."}
+        </p>
+      </div>
+    </div>
+
+    <!-- ═══ INFOGRAFÍA SVG DE HERMES CON DESCARGADOR PNG 3X ═══ -->
+    {article.infographic_svg && (
+      <div style="margin-bottom: 2.5rem;">
+        <span style="font-weight: 800; text-transform: uppercase; color: var(--text-muted); font-size: 0.65rem; letter-spacing: 0.1em; display: block; margin-bottom: 0.75rem; text-align: left;">Infografía de Auditoría Rápida</span>
+
+        <div class="cyber-card infographic-wrapper" style="padding: 1.25rem; background: rgba(18, 22, 41, 0.45); border-color: rgba(0, 240, 255, 0.15); border-radius: 12px; display: flex; flex-direction: column; align-items: center; gap: 1rem;">
+          <div id="infographic-container" style="width: 100%; max-width: 420px; display: block; filter: drop-shadow(0px 0px 10px rgba(0, 240, 255, 0.1));">
+            <Fragment set:html={article.infographic_svg} />
+          </div>
+
+          <div style="display: flex; width: 100%; justify-content: center; border-top: 1px dashed rgba(255,255,255,0.06); padding-top: 0.85rem;">
+            <button id="download-png-btn" class="cyber-btn" style="padding: 0.5rem 1rem; font-size: 0.75rem; border-radius: 8px; font-weight: 800; display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; transition: all 0.2s;">
+              <svg style="width: 14px; height: 14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+              </svg>
+              Descargar PNG (Retina 3x para Historias)
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    <!-- Reproductor de Video Original (YouTube / TikTok) -->
+    {directYoutubeId && (
+      <div style="margin-bottom: 2.5rem;">
+        <span style="font-weight: 800; text-transform: uppercase; color: var(--text-muted); font-size: 0.65rem; letter-spacing: 0.1em; display: block; margin-bottom: 0.75rem;">Vídeo de la Declaración (YouTube)</span>
+        <div style="position: relative; width: 100%; padding-bottom: 56.25%; height: 0; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 8px 30px rgba(0,0,0,0.5);">
+          <iframe src={`https://www.youtube.com/embed/${directYoutubeId}`} style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none;" allowfullscreen></iframe>
+        </div>
+      </div>
+    )}
+
+    {tiktokVideoId && (
+      <div style="margin-bottom: 2.5rem; display: flex; flex-direction: column; align-items: center;">
+        <span style="font-weight: 800; text-transform: uppercase; color: var(--text-muted); font-size: 0.65rem; letter-spacing: 0.1em; display: block; margin-bottom: 0.75rem; align-self: flex-start; width: 100%;">Vídeo de la Declaración (TikTok)</span>
+        <div style="width: 100%; max-width: 325px; height: 580px; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 8px 30px rgba(0,0,0,0.5); background: rgba(0,0,0,0.25);">
+          <iframe src={`https://www.tiktok.com/embed/v2/${tiktokVideoId}`} style="width: 100%; height: 100%; border: none;" allowfullscreen></iframe>
+        </div>
+      </div>
+    )}
+
+    <!-- Explicación de los Hechos (Cuerpo del Artículo Maquetado) -->
+    {article.explanation && (
+      <section style="margin-bottom: 2.5rem;">
+        <span style="font-weight: 800; text-transform: uppercase; color: var(--text-muted); font-size: 0.65rem; letter-spacing: 0.1em; display: block; margin-bottom: 0.75rem;">Análisis Detallado y Datos Oficiales</span>
+        <div style="font-size: 0.95rem; line-height: 1.65; color: #E2E8F0; background: rgba(18, 22, 41, 0.2); padding: 1.5rem;" class="cyber-card">
+          <Fragment set:html={renderMarkdown(article.explanation)} />
+        </div>
+      </section>
+    )}
+
+    <!-- Tags en el pie de la noticia (Abajo) -->
+    {tags.length > 0 && (
+      <div style="margin-top: 1.5rem; margin-bottom: 2.5rem; display: flex; gap: 0.5rem; justify-content: flex-start; flex-wrap: wrap; border-top: 1px dashed rgba(255,255,255,0.06); padding-top: 1.2rem;">
+        <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700; font-family: monospace; align-self: center; margin-right: 0.5rem;">Etiquetas:</span>
+        {tags.map(t => (
+          <a href={`/tag/${t.slug}`} style="text-decoration: none; font-size: 0.7rem; font-family: monospace; font-weight: 800; color: var(--neon-blue); background: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0, 240, 255, 0.2); padding: 0.2rem 0.55rem; border-radius: 4px; transition: all 0.2s;" class="hover-link">
+            #{t.name}
+          </a>
+        ))}
+      </div>
+    )}
+
+    <!-- Fuentes y Evidencia -->
+    <section style="margin-bottom: 2.5rem;">
+      <span style="font-weight: 800; text-transform: uppercase; color: var(--text-muted); font-size: 0.65rem; letter-spacing: 0.1em; display: block; margin-bottom: 1rem;">Fuentes y Evidencia</span>
+
+      <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+        {sources.map(src => (
+          <div class="cyber-card" style="padding: 0.85rem 1.25rem; display: flex; justify-content: space-between; align-items: center; background: rgba(18, 22, 41, 0.35); border-color: rgba(255,255,255,0.04); border-radius: 8px;">
+            <div style="display: flex; align-items: center; gap: 0.75rem; text-align: left; flex: 1; min-width: 0;">
+              <svg style="width: 16px; height: 16px; color: var(--neon-blue); flex-shrink: 0;" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+              </svg>
+              <div style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                <strong style="color: var(--text-main); font-size: 0.88rem;">{src.title}</strong>
+              </div>
+            </div>
+
+            <a href={src.url} target="_blank" rel="noopener noreferrer" style="color: var(--neon-blue); display: flex; align-items: center; justify-content: center; padding: 0.25rem; margin-left: 1rem; transition: color 0.2s;" class="hover-link" title="Visitar documento oficial">
+              <svg style="width: 18px; height: 18px;" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+              </svg>
+            </a>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <!-- Barra de Compartir al Final (Card) -->
+    <div style="margin-top: 3rem; margin-bottom: 3rem;">
+      <ShareBar
+        title={article.title}
+        text={`MATIZA califica de ${article.verdict.toLowerCase()} la declaración: "${article.claim}"`}
+        variant="card"
+        label="Difunde la Verdad"
+      />
+    </div>
+
+    <!-- Artículos Relacionados (Siguiente lectura) -->
+    <section style="margin-bottom: 3rem;">
+      <span style="font-weight: 800; text-transform: uppercase; color: var(--text-muted); font-size: 0.65rem; letter-spacing: 0.15em; display: block; padding-left: 0.25rem; margin-bottom: 1.25rem;">Casos e Informes Relacionados</span>
+
+      <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+
+        {relatedSameTopic.length > 0 && (
+          <div>
+            <h4 style="font-size: 0.8rem; font-weight: 800; color: var(--neon-blue); text-transform: uppercase; margin-bottom: 0.75rem; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.4rem;">
+              <span></span> Del mismo expediente
+            </h4>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
+              {relatedSameTopic.map(art => (
+                <a href={`${cleanBase}/noticia/${art.slug}`} class="cyber-card" style="padding: 0.75rem; display: flex; gap: 0.75rem; text-decoration: none; align-items: center; border-color: rgba(255,255,255,0.04); background: rgba(18, 22, 41, 0.35);">
+                  <div style="width: 60px; height: 60px; border-radius: 8px; overflow: hidden; background: #000; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(255,255,255,0.06); flex-shrink: 0;">
+                    <img src={art.multimedia_url || 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&w=120&q=80'} alt="Portada" style="width: 100%; height: 100%; object-fit: cover;" />
+                  </div>
+                  <div style="flex: 1; min-width: 0;">
+                    <h5 style="font-size: 0.8rem; font-weight: 750; color: var(--text-main); margin: 0 0 0.15rem 0; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
+                      {art.title}
+                    </h5>
+                    <span style="font-size: 0.65rem; color: var(--text-muted); display: block;">
+                      {getRelativeTime(art.published_at)}
+                    </span>
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {relatedOtherTopics.length > 0 && (
+          <div>
+            <h4 style="font-size: 0.8rem; font-weight: 800; color: var(--neon-purple); text-transform: uppercase; margin-bottom: 0.75rem; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.4rem;">
+              <span></span> Otros Expedientes Vivos
+            </h4>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
+              {relatedOtherTopics.map(art => (
+                <a href={`${cleanBase}/noticia/${art.slug}`} class="cyber-card" style="padding: 0.75rem; display: flex; gap: 0.75rem; text-decoration: none; align-items: center; border-color: rgba(255,255,255,0.04); background: rgba(18, 22, 41, 0.35);">
+                  <div style="width: 60px; height: 60px; border-radius: 8px; overflow: hidden; background: #000; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(255,255,255,0.06); flex-shrink: 0;">
+                    <img src={art.multimedia_url || 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&w=120&q=80'} alt="Portada" style="width: 100%; height: 100%; object-fit: cover;" />
+                  </div>
+                  <div style="flex: 1; min-width: 0;">
+                    <h5 style="font-size: 0.8rem; font-weight: 750; color: var(--text-main); margin: 0 0 0.15rem 0; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
+                      {art.title}
+                    </h5>
+                    <span style="font-size: 0.65rem; color: var(--text-muted); display: block;">
+                      {getRelativeTime(art.published_at)}
+                    </span>
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
+      </div>
+    </section>
+
+    <!-- Botón Volver -->
+    <div style="margin-bottom: 2rem; border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
+      <a href="/" class="cyber-btn" style="width: 100%; text-align: center; border-radius: 12px; padding: 0.75rem;">
+        Volver al Radar Principal
+      </a>
+    </div>
+
+  </div>
+</Layout>
+
+<!-- Script para el descargador interactivo PNG retina (3x) -->
+<script is:inline>
+  document.getElementById('download-png-btn')?.addEventListener('click', () => {
+    const svgEl = document.querySelector('#infographic-container svg');
+    if (!svgEl) return;
+
+    const viewBox = svgEl.getAttribute('viewBox') || '0 0 390 1000';
+    const [, , w, h] = viewBox.split(' ').map(Number);
+
+    // Escala 3x retina para Stories
+    const scale = 3;
+    const canvas = document.createElement('canvas');
+    canvas.width = w * scale;
+    canvas.height = h * scale;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Serialización SVG limpia
+    const svgString = new XMLSerializer().serializeToString(svgEl);
+    const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+    const blobUrl = URL.createObjectURL(svgBlob);
+
+    const img = new Image();
+    img.onload = () => {
+      // Fondo transparente
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      const link = document.createElement('a');
+      link.download = `matiza-auditoria-${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+
+      URL.revokeObjectURL(blobUrl);
+    };
+    img.src = blobUrl;
+  });
+</script>
+
+<style>
+  .nav-link:hover {
+    color: var(--neon-blue) !important;
+  }
+
+  /* Asegurar escalado responsivo del SVG de la infografía */
+  #infographic-container svg {
+    width: 100% !important;
+    height: auto !important;
+    display: block;
+  }
+
+  /* Responsive para la caja de origen */
+  @media (max-width: 600px) {
+    .origin-card {
+      grid-template-columns: 1fr !important;
+      gap: 1.25rem !important;
+    }
+    .origin-card-img {
+      margin: 0 auto;
+    }
+  }
+</style>

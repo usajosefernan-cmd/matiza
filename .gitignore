@@ -1,0 +1,14 @@
+node_modules/
+.astro/
+dist/
+.env
+*.db
+*.log
+
+# Swarm Loop Engineering Exclusions
+.worktrees/
+
+# SQLite & Syncthing temporaries
+*.db-wal
+*.db-shm
+*~syncthing~*

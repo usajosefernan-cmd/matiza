@@ -1,0 +1,336 @@
+---
+import { getDatabase } from '../lib/db.js';
+import path from 'node:path';
+import Layout from './Layout.astro';
+
+interface Props {
+  title: string;
+  activeTab: string;
+  message?: string;
+  messageType?: string;
+}
+
+const { title, activeTab, message, messageType } = Astro.props;
+
+const db = getDatabase();
+
+
+const draftsCount = db.prepare("SELECT COUNT(*) as c FROM articles WHERE status = 'borrador'").get() as any;
+const publishedCount = db.prepare("SELECT COUNT(*) as c FROM articles WHERE status = 'publicado'").get() as any;
+const topicsCount = db.prepare("SELECT COUNT(*) as c FROM topics").get() as any;
+const radarCount = db.prepare("SELECT COUNT(*) as c FROM radar_sources").get() as any;
+const pendingCount = db.prepare("SELECT COUNT(*) as c FROM scraped_items WHERE status = 'pendiente'").get() as any;
+const userSubCount = db.prepare("SELECT COUNT(*) as c FROM user_submissions WHERE status = 'recibido'").get() as any;
+
+db.close();
+
+const baseRoute = Astro.url.pathname.includes('/pro/matiza') ? '/pro/matiza' : '';
+const cleanBase = baseRoute;
+---
+
+<Layout title={title}>
+  <div class="admin-container">
+    
+    <!-- CABECERA PREMIUM NEÓN -->
+    <header class="admin-header">
+      <div class="header-main">
+        <h1> Portal <span class="text-gradient-blue">Control Center</span></h1>
+        <p>Consola de verificación, editor de desmentidos y control del radar inteligente de IA.</p>
+      </div>
+      
+      <!-- KPIs / Métricas del Sistema -->
+      <div class="dashboard-kpis">
+        <a href={`${cleanBase}/admin/aprobacion`} class={`kpi-card purple ${activeTab === 'aprobacion' ? 'active' : ''}`} style="text-decoration: none;">
+          <span class="kpi-val">{draftsCount.c}</span>
+          <span class="kpi-label">Borradores IA</span>
+        </a>
+        <a href={`${cleanBase}/admin/publicados`} class={`kpi-card blue ${activeTab === 'publicados' ? 'active' : ''}`} style="text-decoration: none;">
+          <span class="kpi-val">{publishedCount.c}</span>
+          <span class="kpi-label">Publicados</span>
+        </a>
+        <a href={`${cleanBase}/admin/expedientes`} class={`kpi-card green ${activeTab === 'expedientes' ? 'active' : ''}`} style="text-decoration: none;">
+          <span class="kpi-val">{topicsCount.c}</span>
+          <span class="kpi-label">Expedientes</span>
+        </a>
+        <a href={`${cleanBase}/admin/radar`} class={`kpi-card orange ${activeTab === 'radar' ? 'active' : ''}`} style="text-decoration: none;">
+          <span class="kpi-val">{radarCount.c}</span>
+          <span class="kpi-label">Fuentes Radar</span>
+        </a>
+        <a href={`${cleanBase}/admin/dashboard`} class={`kpi-card red ${activeTab === 'dashboard' ? 'active' : ''}`} style="text-decoration: none;">
+          <span class="kpi-val">{pendingCount.c}</span>
+          <span class="kpi-label">En la Cola</span>
+        </a>
+      </div>
+    </header>
+
+    <!-- Notificaciones del Servidor -->
+    {message && (
+      <div class={`toast-notification ${messageType}`}>
+        <div class="toast-indicator"></div>
+        <p>{message}</p>
+      </div>
+    )}
+
+    <!-- MENÚ DE NAVEGACIÓN DE PÁGINAS REALES -->
+    <nav class="admin-tabs-nav">
+      <a href={`${cleanBase}/admin/dashboard`} class={`admin-tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}> Dashboard</a>
+      <a href={`${cleanBase}/admin/aprobacion`} class={`admin-tab-btn ${activeTab === 'aprobacion' ? 'active' : ''}`}> Cola Moderación ({draftsCount.c})</a>
+      <a href={`${cleanBase}/admin/triage`} class={`admin-tab-btn ${activeTab === 'triage' ? 'active' : ''}`}>📩 Triage Usuarios ({userSubCount.c})</a>
+      <a href={`${cleanBase}/admin/motor`} class={`admin-tab-btn ${activeTab === 'motor' ? 'active' : ''}`}> Motor MATIZA</a>
+      <a href={`${cleanBase}/admin/redactor`} class={`admin-tab-btn ${activeTab === 'redactor' ? 'active' : ''}`}>✍️ Plantilla Redactor</a>
+      <a href={`${cleanBase}/admin/publicados`} class={`admin-tab-btn ${activeTab === 'publicados' ? 'active' : ''}`}>📰 Publicados ({publishedCount.c})</a>
+      <a href={`${cleanBase}/admin/expedientes`} class={`admin-tab-btn ${activeTab === 'expedientes' ? 'active' : ''}`}>📁 Expedientes</a>
+      <a href={`${cleanBase}/admin/politica`} class={`admin-tab-btn ${activeTab === 'politica' ? 'active' : ''}`}> Auditoría Política</a>
+      <a href={`${cleanBase}/admin/radar`} class={`admin-tab-btn ${activeTab === 'radar' ? 'active' : ''}`}> Radar & Scrapers</a>
+      <a href={`${cleanBase}/admin/verificaciones`} class={`admin-tab-btn ${activeTab === 'verificaciones' ? 'active' : ''}`}> Logs de Búsqueda</a>
+    </nav>
+
+    <!-- CONTENEDORES DE PANELES DE PESTAÑA -->
+    <div class="admin-tab-panels">
+      <div class="admin-tab-panel active">
+        <slot />
+      </div>
+    </div>
+
+  </div>
+</Layout>
+
+<style is:global>
+  /* Variables de la interfaz de administración */
+  :root {
+    --neon-blue: #00f0ff;
+    --neon-rose: #ff3366;
+    --neon-green: #00ffc4;
+    --neon-purple: #9d4ede;
+    --neon-amber: #ffb020;
+    --bg-main: #070913;
+    --bg-card: rgba(18, 22, 41, 0.45);
+    --border-color: rgba(255, 255, 255, 0.08);
+    --text-main: #f8fafc;
+    --text-muted: #64748b;
+  }
+
+  .admin-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+
+  .admin-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 1.5rem;
+  }
+
+  .admin-header h1 {
+    font-size: 2rem;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    margin: 0 0 0.25rem 0;
+  }
+
+  .admin-header p {
+    color: var(--text-muted);
+    margin: 0;
+    font-size: 0.9rem;
+  }
+
+  .dashboard-kpis {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .kpi-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    padding: 0.75rem 1.25rem;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 100px;
+    transition: transform 0.2s, border-color 0.2s;
+    cursor: pointer;
+  }
+
+  .kpi-card:hover, .kpi-card.active {
+    transform: translateY(-2px);
+  }
+
+  .kpi-card.purple:hover, .kpi-card.purple.active { border-color: var(--neon-purple); box-shadow: 0 0 10px rgba(157, 78, 221, 0.15); }
+  .kpi-card.blue:hover, .kpi-card.blue.active { border-color: var(--neon-blue); box-shadow: 0 0 10px rgba(0, 240, 255, 0.15); }
+  .kpi-card.green:hover, .kpi-card.green.active { border-color: var(--neon-green); box-shadow: 0 0 10px rgba(0, 255, 196, 0.15); }
+  .kpi-card.orange:hover, .kpi-card.orange.active { border-color: var(--neon-amber); box-shadow: 0 0 10px rgba(255, 176, 32, 0.15); }
+  .kpi-card.red:hover, .kpi-card.red.active { border-color: var(--neon-rose); box-shadow: 0 0 10px rgba(255, 51, 102, 0.15); }
+
+  .kpi-val {
+    font-size: 1.5rem;
+    font-weight: 900;
+    color: #fff;
+    line-height: 1.2;
+  }
+
+  .kpi-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    font-weight: bold;
+    margin-top: 0.15rem;
+  }
+
+  .admin-tabs-nav {
+    display: flex;
+    gap: 0.5rem;
+    overflow-x: auto;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 2rem;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .admin-tabs-nav::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  .admin-tabs-nav::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.05);
+    border-radius: 2px;
+  }
+
+  .admin-tab-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    padding: 0.6rem 1.15rem;
+    font-size: 0.8rem;
+    font-weight: 700;
+    border-radius: 8px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.25s;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .admin-tab-btn:hover {
+    color: #fff;
+    background: rgba(255,255,255,0.02);
+  }
+
+  .admin-tab-btn.active {
+    color: var(--neon-blue);
+    background: rgba(0, 240, 255, 0.06);
+    border-color: rgba(0, 240, 255, 0.2);
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.05);
+  }
+
+  .cyber-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(5px);
+    transition: border-color 0.2s, box-shadow 0.2s;
+    margin-bottom: 1.5rem;
+  }
+
+  .cyber-card:hover {
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .section-title {
+    font-size: 1.35rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin: 0 0 1.25rem 0;
+    color: #fff;
+  }
+
+  .edit-input, .edit-form input, .edit-form select, .edit-form textarea {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--border-color);
+    color: #fff;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    outline: none;
+    transition: border-color 0.25s, box-shadow 0.25s;
+    font-family: inherit;
+  }
+
+  .edit-input:focus {
+    border-color: var(--neon-blue);
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.15);
+  }
+
+  .form-group {
+    margin-bottom: 1.25rem;
+  }
+
+  .form-group label {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+    letter-spacing: 0.05em;
+  }
+
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.25rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .toast-notification {
+    background: rgba(0, 240, 255, 0.06);
+    border: 1px solid rgba(0, 240, 255, 0.2);
+    border-radius: 8px;
+    padding: 0.75rem 1.25rem;
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .toast-notification.success {
+    background: rgba(0, 255, 196, 0.05);
+    border-color: rgba(0, 255, 196, 0.2);
+  }
+
+  .toast-notification.error {
+    background: rgba(255, 51, 102, 0.05);
+    border-color: rgba(255, 51, 102, 0.2);
+  }
+
+  .toast-notification p {
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+
+  .toast-indicator {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    background: var(--neon-blue);
+  }
+
+  .toast-notification.success .toast-indicator { background: var(--neon-green); }
+  .toast-notification.error .toast-indicator { background: var(--neon-rose); }
+</style>

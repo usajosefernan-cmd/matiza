@@ -1,0 +1,522 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { getDatabase } from '../lib/db.js';
+
+export const prerender = true;
+
+const db = getDatabase();
+
+// Cargar todos los artículos publicados en la vertical Live
+const articles = db.prepare(`
+  SELECT a.*, t.title as topic_title, t.slug as topic_slug
+  FROM articles a
+  INNER JOIN topics t ON a.topic_id = t.id
+  WHERE a.status = 'publicado' AND (t.category LIKE '%Live%' OR t.category LIKE '%Debate%' OR a.category LIKE '%Live%')
+  ORDER BY a.published_at DESC, a.created_at DESC
+`).all() as any[];
+
+db.close();
+
+// Mapa de veredicto a color neón
+const getVerdictClass = (verdict) => {
+  const v = (verdict || '').toLowerCase();
+  if (v.includes('verdadero')) return 'green';
+  if (v.includes('falso')) return 'rose';
+  if (v.includes('engañoso') || v.includes('contexto')) return 'amber';
+  return 'purple';
+};
+---
+
+<Layout 
+  title="MATIZA Live — Copiloto Conversacional en Tiempo Real" 
+  description="Auditoría de hechos en directo para reuniones, entrevistas y videollamadas con transcripción y contraste inmediato."
+>
+  <div class="labs-hero" style="position: relative; overflow: hidden; padding: 5rem 1.5rem 4rem 1.5rem; background: radial-gradient(circle at 50% 0%, rgba(255, 51, 102, 0.04) 0%, rgba(7, 9, 19, 0) 70%); border-bottom: 1px solid var(--border-color);">
+    <div class="container" style="max-width: 1000px; margin: 0 auto; text-align: center;">
+      <div class="badge" style="font-family: monospace; font-size: 0.65rem; color: var(--neon-rose); border: 1px solid var(--neon-rose); padding: 0.25rem 0.6rem; border-radius: 4px; display: inline-block; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 0.1em; background: rgba(255, 51, 102, 0.02); box-shadow: 0 0 10px rgba(255, 51, 102, 0.15);">
+        LAB-03 / LIVE
+      </div>
+      <h1 style="font-family: var(--font-title); font-size: 2.8rem; font-weight: 900; letter-spacing: -0.04em; color: #fff; margin: 0 0 1rem 0; text-transform: uppercase; line-height: 1.1;">
+        MATIZA LIVE
+      </h1>
+      <p style="font-size: 1.05rem; color: var(--text-muted); line-height: 1.6; max-width: 650px; margin: 0 auto;">
+        Fact-checking a la velocidad de la voz. Transcribe, detecta afirmaciones dudosas y extrae evidencias de registros oficiales en tiempo real mientras transcurre un debate, una reunión o una consulta legal.
+      </p>
+    </div>
+  </div>
+
+  <!-- SIMULADOR INTERACTIVO PREMIUM -->
+  <div class="container" style="max-width: 1000px; margin: 0 auto; padding: 3rem 1.5rem;">
+    
+    <div style="text-align: center; margin-bottom: 2.5rem;">
+      <span style="font-family: monospace; font-size: 0.6rem; color: var(--neon-rose); letter-spacing: 0.05em; text-transform: uppercase;">Simulador de Interfaz</span>
+      <h2 style="font-family: var(--font-title); color: #fff; font-size: 1.6rem; font-weight: 850; text-transform: uppercase; margin: 0.25rem 0 0.5rem 0; letter-spacing: -0.02em;">
+        Demostración del Copiloto en Vivo
+      </h2>
+      <p style="font-size: 0.85rem; color: var(--text-muted); max-width: 500px; margin: 0 auto;">
+        Selecciona un entorno de audio y haz clic en reproducir para ver cómo opera el motor de contraste de MATIZA.
+      </p>
+    </div>
+
+    <!-- Selector de Escenarios -->
+    <div style="display: flex; justify-content: center; gap: 0.75rem; margin-bottom: 2rem; flex-wrap: wrap;">
+      <button class="scenario-btn active" data-scenario="podcast" style="font-family: var(--font-title); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; padding: 0.6rem 1.2rem; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; color: #fff; cursor: pointer; transition: all 0.2s;">
+        [ CHARLA / PODCAST DE JOSE ELIAS ]
+      </button>
+      <button class="scenario-btn" data-scenario="reunion" style="font-family: var(--font-title); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; padding: 0.6rem 1.2rem; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-muted); cursor: pointer; transition: all 0.2s;">
+        [ REUNIÓN CORPORATIVA ]
+      </button>
+      <button class="scenario-btn" data-scenario="abogado" style="font-family: var(--font-title); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; padding: 0.6rem 1.2rem; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-muted); cursor: pointer; transition: all 0.2s;">
+        [ VISITA AL ABOGADO ]
+      </button>
+    </div>
+
+    <!-- Consola del Simulador -->
+    <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 1.5rem; background: rgba(18, 22, 41, 0.4); border: 1px solid var(--border-color); border-radius: 16px; padding: 1.5rem; backdrop-filter: blur(20px);" class="simulator-grid">
+      
+      <!-- Lado Izquierdo: Reproductor de Vídeo de Mockup -->
+      <div style="display: flex; flex-direction: column; gap: 1rem;">
+        
+        <!-- Video Container -->
+        <div style="position: relative; background: #000; aspect-ratio: 16/9; border-radius: 10px; overflow: hidden; border: 1px solid rgba(255,255,255,0.06); display: flex; align-items: center; justify-content: center;">
+          
+          <!-- Mock Visuals: Podcast, Reunión, Abogado -->
+          <div id="video-visual-podcast" class="video-visual-mock" style="width: 100%; height: 100%; position: absolute; background: linear-gradient(135deg, rgba(7,9,19,0.9), rgba(25,18,50,0.85)); display: flex; flex-direction: column; align-items: center; justify-content: center;">
+            <div style="display: flex; gap: 2rem; align-items: center; margin-bottom: 1rem;">
+              <div style="width: 70px; height: 70px; border-radius: 50%; background: rgba(255,255,255,0.08); border: 2px solid var(--neon-rose); display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: bold; color: #fff;">JE</div>
+              <div style="font-family: monospace; font-size: 1.5rem; color: rgba(255,255,255,0.15);">VS</div>
+              <div style="width: 70px; height: 70px; border-radius: 50%; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: bold; color: var(--text-muted);">INVITADO</div>
+            </div>
+            <span style="font-size: 0.8rem; color: #fff; font-family: var(--font-title); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;">Charla del canal de Jose Elias</span>
+            <span style="font-size: 0.65rem; color: var(--text-muted); font-family: monospace; margin-top: 0.25rem;">[ CANAL DE PODCAST OFICIAL ]</span>
+          </div>
+
+          <div id="video-visual-reunion" class="video-visual-mock" style="width: 100%; height: 100%; position: absolute; background: linear-gradient(135deg, rgba(7,9,19,0.9), rgba(15,35,45,0.85)); display: none; flex-direction: column; align-items: center; justify-content: center;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; width: 80%; max-width: 320px; margin-bottom: 1rem;">
+              <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); height: 50px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-family: monospace; color: var(--text-muted);">[ DIRECCIÓN ]</div>
+              <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); height: 50px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-family: monospace; color: var(--text-muted);">[ INVERSIÓN ]</div>
+            </div>
+            <span style="font-size: 0.8rem; color: #fff; font-family: var(--font-title); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;">Reunión de Consejo y Propuesta Comercial</span>
+            <span style="font-size: 0.65rem; color: var(--text-muted); font-family: monospace; margin-top: 0.25rem;">[ AUDIO GRABADO DE SALA ]</span>
+          </div>
+
+          <div id="video-visual-abogado" class="video-visual-mock" style="width: 100%; height: 100%; position: absolute; background: linear-gradient(135deg, rgba(7,9,19,0.9), rgba(30,25,15,0.85)); display: none; flex-direction: column; align-items: center; justify-content: center;">
+            <div style="display: flex; gap: 1.5rem; align-items: center; margin-bottom: 1rem;">
+              <div style="width: 60px; height: 60px; border-radius: 6px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.1rem;">
+                <span style="font-size: 0.5rem; font-family: monospace; color: var(--text-muted);">CLIENTE</span>
+                <span style="font-size: 0.75rem; font-weight: bold; color: #fff;">JE</span>
+              </div>
+              <div style="font-size: 1.2rem; color: rgba(255,255,255,0.2); font-family: monospace;">🗎</div>
+              <div style="width: 60px; height: 60px; border-radius: 6px; background: rgba(255,255,255,0.03); border: 1px solid var(--neon-blue); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.1rem;">
+                <span style="font-size: 0.5rem; font-family: monospace; color: var(--neon-blue);">DEFENSA</span>
+                <span style="font-size: 0.75rem; font-weight: bold; color: #fff;">LDO.</span>
+              </div>
+            </div>
+            <span style="font-size: 0.8rem; color: #fff; font-family: var(--font-title); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;">Consulta Legal y Análisis de Riesgos</span>
+            <span style="font-size: 0.65rem; color: var(--text-muted); font-family: monospace; margin-top: 0.25rem;">[ LECTURA DE AUTO DE ACUSACIÓN ]</span>
+          </div>
+
+          <!-- Capa Play de Inicio -->
+          <div id="play-overlay" style="position: absolute; width: 100%; height: 100%; background: rgba(7, 9, 19, 0.4); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.2s;">
+            <div id="play-btn-circle" style="width: 60px; height: 60px; border-radius: 50%; background: #fff; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 20px rgba(255,255,255,0.3); transition: transform 0.2s;">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="#070913" style="margin-left: 4px;"><path d="M8 5v14l11-7z"/></svg>
+            </div>
+          </div>
+
+          <!-- HUD de Análisis Superpuesto en Video -->
+          <div id="hud-overlay" style="position: absolute; top: 1rem; left: 1rem; right: 1rem; display: flex; justify-content: space-between; font-family: monospace; font-size: 0.6rem; pointer-events: none;">
+            <div style="background: rgba(7, 9, 19, 0.85); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--neon-rose); display: flex; align-items: center; gap: 0.35rem;">
+              <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--neon-rose); display: inline-block;" class="pulse-icon"></span>
+              <span>MATIZA REC: ANALIZANDO AUDIO</span>
+            </div>
+            <div style="background: rgba(7, 9, 19, 0.85); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid var(--border-color); color: var(--neon-blue);">
+              LATENCIA: 350MS
+            </div>
+          </div>
+
+          <!-- Subtítulos de Audio Procesados -->
+          <div id="subtitle-box" style="position: absolute; bottom: 1.5rem; left: 1rem; right: 1rem; background: rgba(7, 9, 19, 0.9); padding: 0.75rem 1rem; border-radius: 8px; border: 1px solid var(--border-color); font-size: 0.8rem; color: #fff; line-height: 1.45; text-align: center; pointer-events: none; min-height: 52px; display: flex; align-items: center; justify-content: center;">
+            Haz clic en el botón de reproducción para iniciar la audición en vivo.
+          </div>
+        </div>
+
+        <!-- Barra de Controles de Audio/Video -->
+        <div style="display: flex; align-items: center; justify-content: space-between; font-family: monospace; font-size: 0.7rem; color: var(--text-muted); background: rgba(7, 9, 19, 0.5); padding: 0.6rem 1rem; border-radius: 8px; border: 1px solid var(--border-color);">
+          <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <button id="audio-play-toggle" style="background: none; border: none; color: #fff; cursor: pointer; font-size: 0.8rem; outline: none;">▶</button>
+            <span id="playback-time">0:00</span>
+          </div>
+          <div style="flex: 1; margin: 0 1rem; height: 3px; background: rgba(255,255,255,0.06); border-radius: 2px; position: relative; overflow: hidden; cursor: pointer;" id="progress-bar-container">
+            <div style="width: 0%; height: 100%; background: var(--neon-rose); transition: width 0.1s linear;" id="progress-bar-fill"></div>
+          </div>
+          <span>VOLUME METER: ACTIVE</span>
+        </div>
+      </div>
+
+      <!-- Lado Derecho: Panel Lateral HUD de Auditoría de Claims -->
+      <div style="display: flex; flex-direction: column; gap: 1rem; border-left: 1px solid var(--border-color); padding-left: 1.5rem;" class="simulator-sidebar">
+        <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+          <span style="font-family: monospace; font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase;">[ AUDITORÍA DE DECLARACIONES ]</span>
+          <span id="analysis-counter" style="font-family: monospace; font-size: 0.6rem; color: var(--neon-blue); font-weight: bold; background: rgba(0, 240, 255, 0.05); padding: 0.15rem 0.35rem; border-radius: 4px; border: 1px solid rgba(0, 240, 255, 0.15);">0 CLAIMS DETECTADOS</span>
+        </div>
+
+        <!-- Caja de Historial de Conversación y Claims Contrastados -->
+        <div id="claims-log-container" style="flex: 1; overflow-y: auto; max-height: 250px; display: flex; flex-direction: column; gap: 1rem; padding-right: 0.25rem;">
+          
+          <div style="text-align: center; color: var(--text-muted); font-size: 0.78rem; padding: 2rem 1rem;" id="empty-claims-notice">
+            El copiloto rastrea y contrasta las declaraciones asíncronamente en el momento en que se formulan.
+          </div>
+          
+        </div>
+
+        <!-- Preguntas Recomendadas Sugeridas por el Copiloto -->
+        <div id="suggested-questions-box" style="border-top: 1px solid var(--border-color); padding-top: 1rem; display: none;">
+          <span style="font-family: monospace; font-size: 0.6rem; color: var(--neon-purple); text-transform: uppercase; display: block; margin-bottom: 0.5rem; letter-spacing: 0.05em;">[ SUGERENCIAS PARA EL DEBATE / PREGUNTAS CLAVE ]</span>
+          <div id="questions-list" style="display: flex; flex-direction: column; gap: 0.4rem;">
+            <!-- Preguntas dinámicas -->
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <div class="container" style="max-width: 680px; margin: 0 auto; padding: 1rem 1.5rem 6rem 1.5rem;">
+    
+    <!-- Listado de Artículos Reales -->
+    <div style="display: flex; flex-direction: column; gap: 1.5rem; margin-bottom: 4rem;">
+      <h2 style="font-family: var(--font-title); color: #fff; font-size: 1.2rem; font-weight: 850; text-transform: uppercase; letter-spacing: -0.01em; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+        Últimos Directos Auditados
+      </h2>
+      
+      {articles.map(art => (
+        <article class={`cyber-card ${getVerdictClass(art.verdict)}`} style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; transition: transform 0.2s ease, box-shadow 0.2s ease;">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+              <span class={`verdict-badge ${art.verdict.toLowerCase().replace(' ', '-')}`} style="font-size: 0.65rem; padding: 0.15rem 0.4rem;">
+                {art.verdict}
+              </span>
+              <a 
+                href={`${cleanBase}/tema/${art.topic_slug || 'general'}`}
+                style="font-size: 0.7rem; font-weight: bold; color: var(--neon-blue); text-decoration: none; text-transform: uppercase;"
+              >
+                #{art.topic_title || 'General'}
+              </a>
+            </div>
+            <time style="font-size: 0.75rem; color: var(--text-muted);" datetime={art.published_at || art.created_at}>
+              Incorporado {getRelativeTime(art.published_at)}
+            </time>
+          </div>
+
+          <div>
+            <h2 style="font-size: 1.35rem; margin-top: 0; margin-bottom: 0.35rem; font-weight: 750; font-family: var(--font-title); line-height: 1.25;">
+              <a href={`${cleanBase}/noticia/${art.slug}`} style="color: var(--text-main); text-decoration: none; transition: color 0.15s;">
+                {art.title}
+              </a>
+            </h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; line-height: 1.4; margin: 0 0 0.75rem 0;">
+              {art.subtitle}
+            </p>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 0.75rem; font-size: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+            <span>Expediente: <a href={`${cleanBase}/tema/${art.topic_slug}`} style="color: var(--neon-purple); text-decoration: none; font-weight: bold;">{art.topic_title}</a></span>
+            <a href={`${cleanBase}/noticia/${art.slug}`} style="color: var(--neon-blue); text-decoration: none; font-weight: 800; display: inline-flex; align-items: center; gap: 0.25rem;">
+              Auditar hechos e informe &rarr;
+            </a>
+          </div>
+        </article>
+      ))}
+
+      {articles.length === 0 && (
+        <div class="cyber-card" style="padding: 2.5rem; text-align: center; border-color: rgba(255,255,255,0.05); background: rgba(255,255,255,0.005); border-radius: 12px;">
+          <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0; line-height: 1.5;">
+            No hay transmisiones en directo grabadas o auditadas en este momento.
+          </p>
+        </div>
+      )}
+    </div>
+
+    <!-- Sugerencias y Envío -->
+    <div style="background: linear-gradient(135deg, rgba(7, 9, 19, 0.8), rgba(255, 51, 102, 0.01)); border: 1px solid var(--border-color); padding: 2.5rem; border-radius: 16px; border-top-color: rgba(255, 51, 102, 0.3);">
+      <h3 style="font-family: var(--font-title); color: #fff; font-size: 1.2rem; font-weight: 850; text-transform: uppercase; margin: 0 0 0.75rem 0; letter-spacing: -0.01em;">
+        Sugerir evento en directo
+      </h3>
+      <p style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1.5rem;">
+        Si hay un debate electoral, discurso o comparecencia oficial de alto impacto y quieres que lo verifiquemos en vivo, introduce la fecha y enlace:
+      </p>
+
+      <form style="display: flex; flex-direction: column; gap: 1.25rem;">
+        <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+          <label style="font-size: 0.7rem; font-family: monospace; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">¿Qué debate, discurso o evento en directo quieres que cubramos?</label>
+          <input 
+            type="text" 
+            placeholder="Ej. Rueda de prensa presidencial del viernes, o debate municipal..." 
+            style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); padding: 0.85rem 1rem; border-radius: 8px; color: #fff; font-size: 0.85rem; outline: none; width: 100%;"
+            required
+          />
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+          <label style="font-size: 0.7rem; font-family: monospace; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Tu Correo Electrónico</label>
+          <input 
+            type="email" 
+            placeholder="Te avisaremos con los enlaces de streaming 30 minutos antes" 
+            style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); padding: 0.85rem 1rem; border-radius: 8px; color: #fff; font-size: 0.85rem; outline: none; width: 100%;"
+            required
+          />
+        </div>
+        <button 
+          type="submit" 
+          style="background: #ffffff; color: #070913; border: none; font-weight: 850; font-family: var(--font-title); font-size: 0.75rem; text-transform: uppercase; padding: 1rem; border-radius: 8px; cursor: pointer; letter-spacing: 0.05em; transition: all 0.2s;"
+        >
+          Sugerir Evento de Retransmisión
+        </button>
+      </form>
+    </div>
+
+  </div>
+</Layout>
+
+<script is:inline>
+  // Datos del Simulador Interactivo
+  const scenarios = {
+    podcast: {
+      subtitles: [
+        { time: 1, text: "José Elías: '...he visto las cifras de esta última ronda de inversión...'" },
+        { time: 4, text: "José Elías: 'Dicen que hemos facturado 42 millones de euros libres de impuestos este trimestre.'" },
+        { time: 8, text: "Invitado: 'Eso supera el rendimiento del 80% de las PYMES nacionales.'" },
+        { time: 12, text: "José Elías: 'Además, en España los autónomos pagan menos IRPF porcentual que en la Eurozona.'" }
+      ],
+      claims: [
+        { 
+          time: 5, 
+          claim: "Facturación de 42 millones libres de impuestos en el trimestre.", 
+          verdict: "Sin Pruebas", 
+          class: "purple",
+          evidence: "No existen registros públicos mercantiles consolidados ni auditorías presentadas a la CNMV para el periodo actual." 
+        },
+        { 
+          time: 13, 
+          claim: "Los autónomos pagan menos IRPF porcentual en España que en la Eurozona.", 
+          verdict: "Falso", 
+          class: "rose",
+          evidence: "Según los informes oficiales comparados de la OCDE y la Comisión Europea, el tipo efectivo e IRPF de autónomos en España (retenciones modulares del 15% o tipos generales) supera la media ponderada de países de la Eurozona de PIB equivalente." 
+        }
+      ],
+      questions: [
+        "¿Cuáles son los balances y auditorías formales que demuestran los 42M declarados?",
+        "¿Qué base de datos de la OCDE o Eurostat contradice la comparación de impuestos de autónomos en la Eurozona?"
+      ]
+    },
+    reunion: {
+      subtitles: [
+        { time: 1, text: "Director: 'La constructora asegura que el túnel cumple el 100% de la directiva europea.'" },
+        { time: 5, text: "Inversionista: 'Eso nos blinda de responsabilidades civiles en caso de derrumbe.'" },
+        { time: 9, text: "Director: 'Claro, la ley nacional no impone auditorías de seguridad a túneles urbanos menores.'" }
+      ],
+      claims: [
+        { 
+          time: 6, 
+          claim: "El túnel cumple el 100% de la directiva europea.", 
+          verdict: "Falta Contexto", 
+          class: "amber",
+          evidence: "La Directiva Europea 2004/54/CE exige planes específicos de ventilación y salidas de emergencia que el plano actual del túnel no contempla." 
+        },
+        { 
+          time: 10, 
+          claim: "La ley nacional no impone auditorías de seguridad a túneles urbanos menores.", 
+          verdict: "Engañoso", 
+          class: "amber",
+          evidence: "Aunque la Directiva de la UE aplica obligatoriamente a túneles de la Red Transeuropea de Carreteras de más de 500 metros, el Real Decreto 635/2006 español extiende las auditorías de seguridad a toda la red urbana autonómica sin excepciones." 
+        }
+      ],
+      questions: [
+        "¿Cuenta el túnel con la aprobación del supervisor de seguridad de túneles conforme al Real Decreto 635/2006?",
+        "¿Cuál es el plano técnico de ventilación que justifica el cumplimiento de la Directiva 2004/54/CE?"
+      ]
+    },
+    abogado: {
+      subtitles: [
+        { time: 1, text: "Ldo: '...según el auto de acusación, tu empresa cometió un delito contra la hacienda pública.'" },
+        { time: 5, text: "Cliente (JE): 'Pero si el delito prescribe a los tres años, y esto ocurrió en 2021.'" },
+        { time: 9, text: "Ldo: 'Es correcto, la prescripción ordinaria de delitos fiscales leves extingue la responsabilidad penal.'" }
+      ],
+      claims: [
+        { 
+          time: 6, 
+          claim: "El delito contra la hacienda pública prescribe a los tres años.", 
+          verdict: "Engañoso", 
+          class: "amber",
+          evidence: "Según el art. 305 del Código Penal, el delito fiscal común prescribe a los 5 años, elevándose a 10 años en su modalidad agravada (cuando la cuota defrauda supera los 600.000 euros)." 
+        },
+        { 
+          time: 10, 
+          claim: "La prescripción ordinaria extingue la responsabilidad penal.", 
+          verdict: "Verdadero", 
+          class: "green",
+          evidence: "Conforme al artículo 130.1.6º del Código Penal español, la prescripción del delito extingue totalmente la responsabilidad penal." 
+        }
+      ],
+      questions: [
+        "¿Cuál es el importe exacto defraudado imputado en el auto judicial para determinar si es delito común o agravado?",
+        "¿Se interrumpió el plazo de prescripción por actuaciones judiciales de investigación antes de los 5 años?"
+      ]
+    }
+  };
+
+  let activeScenarioKey = 'podcast';
+  let isPlaying = false;
+  let currentTime = 0;
+  let timerInterval = null;
+
+  const scenarioButtons = document.querySelectorAll('.scenario-btn');
+  const videoVisualMocks = document.querySelectorAll('.video-visual-mock');
+  const playOverlay = document.getElementById('play-overlay');
+  const audioPlayToggle = document.getElementById('audio-play-toggle');
+  const playbackTime = document.getElementById('playback-time');
+  const progressBarFill = document.getElementById('progress-bar-fill');
+  const subtitleBox = document.getElementById('subtitle-box');
+  const claimsLogContainer = document.getElementById('claims-log-container');
+  const emptyClaimsNotice = document.getElementById('empty-claims-notice');
+  const suggestedQuestionsBox = document.getElementById('suggested-questions-box');
+  const questionsList = document.getElementById('questions-list');
+  const analysisCounter = document.getElementById('analysis-counter');
+
+  // Cambiar escenario
+  scenarioButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      stopSimulation();
+      activeScenarioKey = btn.getAttribute('data-scenario');
+      
+      // Actualizar botones
+      scenarioButtons.forEach(b => {
+        b.style.color = 'var(--text-muted)';
+        b.classList.remove('active');
+      });
+      btn.style.color = '#fff';
+      btn.classList.add('active');
+
+      // Actualizar visual mockup de video
+      videoVisualMocks.forEach(mock => mock.style.display = 'none');
+      document.getElementById(`video-visual-${activeScenarioKey}`).style.display = 'flex';
+      
+      // Resetear interfaz
+      subtitleBox.innerText = "Haz clic en el botón de reproducción para iniciar la audición en vivo.";
+      claimsLogContainer.innerHTML = `<div style="text-align: center; color: var(--text-muted); font-size: 0.78rem; padding: 2rem 1rem;" id="empty-claims-notice">El copiloto rastrea y contrasta las declaraciones asíncronamente en el momento en que se formulan.</div>`;
+      suggestedQuestionsBox.style.display = 'none';
+      analysisCounter.innerText = "0 CLAIMS DETECTADOS";
+    });
+  });
+
+  // Play / Pause
+  playOverlay.addEventListener('click', togglePlayback);
+  audioPlayToggle.addEventListener('click', togglePlayback);
+
+  function togglePlayback() {
+    if (isPlaying) {
+      pauseSimulation();
+    } else {
+      startSimulation();
+    }
+  }
+
+  function startSimulation() {
+    isPlaying = true;
+    playOverlay.style.display = 'none';
+    audioPlayToggle.innerText = '⏸';
+    
+    const scenario = scenarios[activeScenarioKey];
+    const duration = 15; // duración simulada de 15 segundos
+
+    timerInterval = setInterval(() => {
+      currentTime++;
+      if (currentTime > duration) {
+        stopSimulation();
+        return;
+      }
+
+      // Actualizar tiempo de progreso
+      const progressPercent = (currentTime / duration) * 100;
+      progressBarFill.style.width = `${progressPercent}%`;
+      playbackTime.innerText = `0:${currentTime < 10 ? '0' : ''}${currentTime}`;
+
+      // 1. Actualizar subtítulos en tiempo real
+      const activeSubtitle = scenario.subtitles.find(s => s.time === currentTime || (currentTime >= s.time && currentTime < s.time + 3));
+      if (activeSubtitle) {
+        subtitleBox.innerText = activeSubtitle.text;
+      }
+
+      // 2. Insertar Claims detectados en el log lateral
+      const activeClaim = scenario.claims.find(c => c.time === currentTime);
+      if (activeClaim) {
+        const notice = document.getElementById('empty-claims-notice');
+        if (notice) notice.remove();
+
+        const claimEl = document.createElement('div');
+        claimEl.style.cssText = "background: rgba(255,255,255,0.015); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem; border-left-width: 3px; border-left-color: var(--neon-" + activeClaim.class + "); display: flex; flex-direction: column; gap: 0.35rem; animation: slideIn 0.3s ease-out forwards;";
+        claimEl.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span class="verdict-badge ${activeClaim.class}" style="font-size: 0.55rem; padding: 0.1rem 0.3rem;">[VEREDICTO: ${activeClaim.verdict.toUpperCase()}]</span>
+            <span style="font-size: 0.55rem; font-family: monospace; color: var(--text-muted);">${currentTime}s</span>
+          </div>
+          <p style="font-size: 0.78rem; font-weight: 700; color: #fff; margin: 0;">"${activeClaim.claim}"</p>
+          <p style="font-size: 0.7rem; color: var(--text-muted); margin: 0; line-height: 1.4;">${activeClaim.evidence}</p>
+        `;
+        claimsLogContainer.appendChild(claimEl);
+        claimsLogContainer.scrollTop = claimsLogContainer.scrollHeight;
+
+        // Actualizar contador
+        const activeClaimsCount = claimsLogContainer.querySelectorAll('p').length / 2; 
+        analysisCounter.innerText = `${activeClaimsCount} ${activeClaimsCount === 1 ? 'CLAIM DETECTADO' : 'CLAIMS DETECTADOS'}`;
+      }
+
+      // 3. Revelar preguntas clave al final del audio (ej. a los 12 segundos)
+      if (currentTime === 12) {
+        suggestedQuestionsBox.style.display = 'block';
+        questionsList.innerHTML = '';
+        scenario.questions.forEach(q => {
+          const qEl = document.createElement('div');
+          qEl.style.cssText = "background: rgba(157, 78, 221, 0.05); border: 1px solid rgba(157, 78, 221, 0.2); border-radius: 6px; padding: 0.5rem 0.75rem; font-size: 0.72rem; color: #fff; line-height: 1.35;";
+          qEl.innerText = q;
+          questionsList.appendChild(qEl);
+        });
+      }
+
+    }, 1000);
+  }
+
+  function pauseSimulation() {
+    isPlaying = false;
+    clearInterval(timerInterval);
+    audioPlayToggle.innerText = '▶';
+    playOverlay.style.display = 'flex';
+  }
+
+  function stopSimulation() {
+    isPlaying = false;
+    currentTime = 0;
+    clearInterval(timerInterval);
+    audioPlayToggle.innerText = '▶';
+    playOverlay.style.display = 'flex';
+    playbackTime.innerText = '0:00';
+    progressBarFill.style.width = '0%';
+  }
+</script>
+
+<style is:global>
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @media (max-width: 767px) {
+    .simulator-grid {
+      grid-template-columns: 1fr !important;
+    }
+    .simulator-sidebar {
+      border-left: none !important;
+      padding-left: 0 !important;
+      margin-top: 1.5rem;
+    }
+  }
+</style>

@@ -1,0 +1,298 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { getDatabase } from '../lib/db.js';
+
+export const prerender = true;
+
+const db = getDatabase();
+
+// Cargar todos los artículos publicados en la vertical de Justicia
+const articles = db.prepare(`
+  SELECT a.*, t.title as topic_title, t.slug as topic_slug
+  FROM articles a
+  INNER JOIN topics t ON a.topic_id = t.id
+  WHERE a.status = 'publicado' AND t.theme_id = 'theme-justicia'
+  ORDER BY a.published_at DESC, a.created_at DESC
+`).all() as any[];
+
+db.close();
+
+// Mapa de veredicto a color neón
+const getVerdictClass = (verdict) => {
+  const v = (verdict || '').toLowerCase();
+  if (v.includes('verdadero')) return 'green';
+  if (v.includes('falso')) return 'rose';
+  if (v.includes('engañoso') || v.includes('contexto')) return 'amber';
+  return 'purple';
+};
+
+function getRelativeTime(dateString) {
+  if (!dateString) return 'hace un momento';
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  if (isNaN(diffMs)) return 'hace un momento';
+  const diffMin = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffMin < 1) return 'hace unos segundos';
+  if (diffMin < 60) return `hace ${diffMin} min`;
+  if (diffHours < 24) return `hace ${diffHours} h`;
+  return `hace ${diffDays} días`;
+}
+
+const base = import.meta.env.BASE_URL;
+const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base;
+---
+
+<Layout 
+  title="MATIZA Justicia — Auditoría Penal e Institucional" 
+  description="Módulo de análisis de procesos judiciales, fallos, pruebas y tiempos procesales explicados de forma clara y objetiva."
+>
+  <div class="labs-hero" style="position: relative; overflow: hidden; padding: 5rem 1.5rem 4rem 1.5rem; background: radial-gradient(circle at 50% 0%, rgba(0, 240, 255, 0.04) 0%, rgba(7, 9, 19, 0) 70%); border-bottom: 1px solid var(--border-color);">
+    <div class="container" style="max-width: 1000px; margin: 0 auto; text-align: center;">
+      <div class="badge" style="font-family: monospace; font-size: 0.65rem; color: var(--neon-blue); border: 1px solid var(--neon-blue); padding: 0.25rem 0.6rem; border-radius: 4px; display: inline-block; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 0.1em; background: rgba(0, 240, 255, 0.02); box-shadow: 0 0 10px rgba(0, 240, 255, 0.15);">
+        LAB-01 / JUSTICIA
+      </div>
+      <h1 style="font-family: var(--font-title); font-size: 2.8rem; font-weight: 900; letter-spacing: -0.04em; color: #fff; margin: 0 0 1rem 0; text-transform: uppercase; line-height: 1.1;">
+        MATIZA JUSTICIA
+      </h1>
+      <p style="font-size: 1.05rem; color: var(--text-muted); line-height: 1.6; max-width: 650px; margin: 0 auto;">
+        Traducción objetiva de sentencias, autos e imputaciones. Te ayudamos a entender las fases procesales, los indicios de pruebas y la veracidad de los plazos judiciales sin sesgos de prensa.
+      </p>
+    </div>
+  </div>
+
+  <!-- INTERACTIVO: EXPLORADOR DE CASOS PENALES MOCK -->
+  <div class="container" style="max-width: 1000px; margin: 0 auto; padding: 3rem 1.5rem;">
+    
+    <div style="text-align: center; margin-bottom: 2.5rem;">
+      <span style="font-family: monospace; font-size: 0.6rem; color: var(--neon-blue); letter-spacing: 0.05em; text-transform: uppercase;">Simulador de Casos</span>
+      <h2 style="font-family: var(--font-title); color: #fff; font-size: 1.6rem; font-weight: 850; text-transform: uppercase; margin: 0.25rem 0 0.5rem 0; letter-spacing: -0.02em;">
+        Cómo analiza MATIZA la Jurisprudencia
+      </h2>
+      <p style="font-size: 0.85rem; color: var(--text-muted); max-width: 500px; margin: 0 auto;">
+        Selecciona un caso tipo y explora el desglose técnico, los veredictos y las preguntas clave.
+      </p>
+    </div>
+
+    <!-- Selectores del Caso -->
+    <div style="display: flex; justify-content: center; gap: 0.75rem; margin-bottom: 2rem; flex-wrap: wrap;">
+      <button class="case-btn active" data-case="imputacion" style="font-family: var(--font-title); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; padding: 0.6rem 1.2rem; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; color: #fff; cursor: pointer; transition: all 0.2s;">
+        [ Mitos de la Imputación ]
+      </button>
+      <button class="case-btn" data-case="fiscal" style="font-family: var(--font-title); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; padding: 0.6rem 1.2rem; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-muted); cursor: pointer; transition: all 0.2s;">
+        [ Delitos Societarios ]
+      </button>
+      <button class="case-btn" data-case="prescripcion" style="font-family: var(--font-title); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; padding: 0.6rem 1.2rem; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-muted); cursor: pointer; transition: all 0.2s;">
+        [ Plazos de Prescripción ]
+      </button>
+    </div>
+
+    <!-- Panel del Explorador de Casos -->
+    <div style="background: rgba(18, 22, 41, 0.4); border: 1px solid var(--border-color); padding: 2rem; border-radius: 16px; backdrop-filter: blur(20px);">
+      <div id="case-content-box">
+        <!-- Contenido dinámico inyectado por JS -->
+      </div>
+    </div>
+
+  </div>
+
+  <div class="container" style="max-width: 680px; margin: 0 auto; padding: 1rem 1.5rem 6rem 1.5rem;">
+    
+    <!-- Listado de Artículos (Dinámico) -->
+    <div style="display: flex; flex-direction: column; gap: 1.5rem; margin-bottom: 4rem;">
+      <h2 style="font-family: var(--font-title); color: #fff; font-size: 1.2rem; font-weight: 850; text-transform: uppercase; letter-spacing: -0.01em; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+        Expedientes Judiciales Auditados
+      </h2>
+      
+      {articles.map(art => (
+        <article class={`cyber-card ${getVerdictClass(art.verdict)}`} style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; transition: transform 0.2s ease, box-shadow 0.2s ease;">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+              <span class={`verdict-badge ${art.verdict.toLowerCase().replace(' ', '-')}`} style="font-size: 0.65rem; padding: 0.15rem 0.4rem;">
+                {art.verdict}
+              </span>
+              <a 
+                href={`${cleanBase}/tema/${art.topic_slug || 'general'}`}
+                style="font-size: 0.7rem; font-weight: bold; color: var(--neon-blue); text-decoration: none; text-transform: uppercase;"
+              >
+                #{art.topic_title || 'General'}
+              </a>
+            </div>
+            <time style="font-size: 0.75rem; color: var(--text-muted);" datetime={art.published_at || art.created_at}>
+              Incorporado {getRelativeTime(art.published_at)}
+            </time>
+          </div>
+
+          <div>
+            <h2 style="font-size: 1.35rem; margin-top: 0; margin-bottom: 0.35rem; font-weight: 750; font-family: var(--font-title); line-height: 1.25;">
+              <a href={`${cleanBase}/noticia/${art.slug}`} style="color: var(--text-main); text-decoration: none; transition: color 0.15s;">
+                {art.title}
+              </a>
+            </h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; line-height: 1.4; margin: 0 0 0.75rem 0;">
+              {art.subtitle}
+            </p>
+            {art.claim && (
+              <div style="background: rgba(0,0,0,0.15); border-left: 2px solid var(--border-color); padding: 0.5rem 0.75rem; font-size: 0.8rem; font-style: italic; color: var(--text-muted); margin-bottom: 0.5rem;">
+                <strong>Claim viral:</strong> "{art.claim}"
+              </div>
+            )}
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 0.75rem; font-size: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+            <span>Expediente: <a href={`${cleanBase}/tema/${art.topic_slug}`} style="color: var(--neon-purple); text-decoration: none; font-weight: bold;">{art.topic_title}</a></span>
+            <a href={`${cleanBase}/noticia/${art.slug}`} style="color: var(--neon-blue); text-decoration: none; font-weight: 800; display: inline-flex; align-items: center; gap: 0.2rem;">
+              Auditar hechos e informe &rarr;
+            </a>
+          </div>
+        </article>
+      ))}
+
+      {articles.length === 0 && (
+        <div class="cyber-card" style="padding: 2.5rem; text-align: center; border-color: rgba(255,255,255,0.05); background: rgba(255,255,255,0.005); border-radius: 12px;">
+          <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0; line-height: 1.5;">
+            No hay desmentidos judiciales publicados en la base de datos local en este momento.
+          </p>
+        </div>
+      )}
+    </div>
+
+    <!-- Sugerencias y Envío -->
+    <div style="background: linear-gradient(135deg, rgba(7, 9, 19, 0.8), rgba(0, 240, 255, 0.01)); border: 1px solid var(--border-color); padding: 2.5rem; border-radius: 16px; border-top-color: rgba(0, 240, 255, 0.3);">
+      <h3 style="font-family: var(--font-title); color: #fff; font-size: 1.2rem; font-weight: 850; text-transform: uppercase; margin: 0 0 0.75rem 0; letter-spacing: -0.01em;">
+        Sugerir caso penal o tema
+      </h3>
+      <p style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1.5rem;">
+        Este módulo procesa fallos jurisprudenciales oficiales. Si quieres priorizar un caso judicial activo para su verificación, ingresa los detalles:
+      </p>
+
+      <form style="display: flex; flex-direction: column; gap: 1.25rem;">
+        <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+          <label style="font-size: 0.7rem; font-family: monospace; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">¿Qué caso o tema penal te gustaría que auditemos primero?</label>
+          <input 
+            type="text" 
+            placeholder="Ej. Funcionamiento de recursos ante el Tribunal Supremo, o caso de actualidad..." 
+            style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); padding: 0.85rem 1rem; border-radius: 8px; color: #fff; font-size: 0.85rem; outline: none; width: 100%;"
+            required
+          />
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+          <label style="font-size: 0.7rem; font-family: monospace; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Tu Correo Electrónico</label>
+          <input 
+            type="email" 
+            placeholder="Para notificarte cuando la auditoría se publique" 
+            style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); padding: 0.85rem 1rem; border-radius: 8px; color: #fff; font-size: 0.85rem; outline: none; width: 100%;"
+            required
+          />
+        </div>
+        <button 
+          type="submit" 
+          style="background: #ffffff; color: #070913; border: none; font-weight: 850; font-family: var(--font-title); font-size: 0.75rem; text-transform: uppercase; padding: 1rem; border-radius: 8px; cursor: pointer; letter-spacing: 0.05em; transition: all 0.2s;"
+        >
+          Suscribirse al Módulo Justicia
+        </button>
+      </form>
+    </div>
+
+  </div>
+</Layout>
+
+<script is:inline>
+  const cases = {
+    imputacion: {
+      title: "Imputación Judicial vs Culpabilidad",
+      claim: "Un medio digital asegura que 'un cargo público ha sido imputado formalmente, lo que certifica su culpabilidad en el fraude de adjudicaciones'.",
+      verdict: "Falso",
+      verdict_class: "rose",
+      legal_basis: "Artículo 118 de la Ley de Enjuiciamiento Criminal (LECrim). En el sistema judicial español, la figura de la 'imputación' (actualmente denominada judicialmente como 'investigado') es una garantía procesal de defensa, no una declaración de culpabilidad ni una acusación penal firme. Permite al ciudadano intervenir con abogado en la instrucción judicial y proponer pruebas de descargo antes de la apertura del juicio oral.",
+      questions: [
+        "¿Cuáles son los indicios concretos detallados en el auto judicial para incoar la condición de investigado?",
+        "¿Se ha decretado la apertura del juicio oral o el caso sigue en fase de instrucción preliminar?"
+      ]
+    },
+    fiscal: {
+      title: "Delitos Societarios y de Administración Desleal",
+      claim: "Se difunde en X que 'la junta directiva realizó una administración desleal por tomar decisiones empresariales arriesgadas que generaron pérdidas'.",
+      verdict: "Falta Contexto",
+      verdict_class: "amber",
+      legal_basis: "Artículos 252 y 295 del Código Penal español. La ley española y la jurisprudencia del Tribunal Supremo distinguen estrictamente el 'riesgo empresarial legítimo' del dolo. La administración desleal exige el abuso de funciones de administración y la disposición de bienes en perjuicio del patrimonio administrado, no la mera obtención de pérdidas comerciales resultantes de un mercado desfavorable (doctrina Business Judgment Rule).",
+      questions: [
+        "¿Existió un beneficio o lucro personal no justificado por parte de los administradores?",
+        "¿Se vulneraron los deberes fiduciarios de lealtad o los estatutos mercantiles de la sociedad de forma deliberada?"
+      ]
+    },
+    prescripcion: {
+      title: "Plazos de Prescripción del Delito Fiscal",
+      claim: "Un post viral afirma que 'las deudas de IRPF y los delitos fiscales prescriben siempre a los tres años ante la Agencia Tributaria'.",
+      verdict: "Engañoso",
+      verdict_class: "amber",
+      legal_basis: "Artículo 305 del Código Penal y Ley General Tributaria (LGT). Las deudas tributarias administrativas prescriben a los 4 años. El delito contra la hacienda pública prescribe ordinariamente a los 5 años, pero si la cuota defraudada excede de 600.000 euros o se comete en el seno de una organización criminal, la prescripción se eleva a los 10 años en su modalidad de tipo agravado.",
+      questions: [
+        "¿Cuál es el importe de la cuota presuntamente defraudada imputada para clasificar el tipo de delito?",
+        "¿Hubo requerimiento oficial de cobro o inspección formal que interrumpiera el cómputo de la prescripción?"
+      ]
+    }
+  };
+
+  const caseButtons = document.querySelectorAll('.case-btn');
+  const caseContentBox = document.getElementById('case-content-box');
+
+  function renderCase(key) {
+    const c = cases[key];
+    caseContentBox.innerHTML = `
+      <div style="display: flex; flex-direction: column; gap: 1.25rem; animation: slideIn 0.2s ease-out forwards;">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 0.75rem;">
+          <h3 style="font-family: var(--font-title); color: #fff; font-size: 1.25rem; font-weight: 850; margin: 0; text-transform: uppercase;">${c.title}</h3>
+          <span class="verdict-badge ${c.verdict_class}" style="font-size: 0.6rem; padding: 0.15rem 0.45rem;">[VEREDICTO: ${c.verdict.toUpperCase()}]</span>
+        </div>
+        <div>
+          <span style="font-family: monospace; font-size: 0.6rem; color: var(--text-muted); text-transform: uppercase; display: block; margin-bottom: 0.25rem;">[ AFIRMACIÓN EN REDES / MEDIOS ]</span>
+          <p style="font-size: 0.85rem; color: #fff; margin: 0; font-style: italic; line-height: 1.45;">"${c.claim}"</p>
+        </div>
+        <div>
+          <span style="font-family: monospace; font-size: 0.6rem; color: var(--neon-blue); text-transform: uppercase; display: block; margin-bottom: 0.25rem;">[ COTEJO JURÍDICO / CÓDIGO PENAL ]</span>
+          <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0; line-height: 1.55;">${c.legal_basis}</p>
+        </div>
+        <div style="border-top: 1px solid rgba(255,255,255,0.06); padding-top: 0.75rem;">
+          <span style="font-family: monospace; font-size: 0.6rem; color: var(--neon-purple); text-transform: uppercase; display: block; margin-bottom: 0.5rem;">[ PREGUNTAS CRUCIALES RECOMENDADAS ]</span>
+          <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+            ${c.questions.map(q => `
+              <div style="background: rgba(157, 78, 221, 0.05); border: 1px solid rgba(157, 78, 221, 0.15); border-radius: 6px; padding: 0.5rem 0.75rem; font-size: 0.72rem; color: #fff; line-height: 1.35;">${q}</div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  caseButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      caseButtons.forEach(b => {
+        b.style.color = 'var(--text-muted)';
+        b.classList.remove('active');
+      });
+      btn.style.color = '#fff';
+      btn.classList.add('active');
+      
+      const key = btn.getAttribute('data-case');
+      renderCase(key);
+    });
+  });
+
+  // Render inicial
+  renderCase('imputacion');
+</script>
+
+<style is:global>
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  article:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0, 240, 255, 0.05);
+  }
+</style>
