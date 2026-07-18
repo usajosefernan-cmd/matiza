@@ -1,79 +1,125 @@
-import { callGemini, getDb } from './config.js';
+import { runAgentPanel, synthesizeAgentPanel } from './lib/multi-agent.js';
 import { getClaimCache } from './cache.js';
 
-export async function verifyClaim(claimText, sources = [], signal = null) {
-  console.log(`[Verifier] Verificando claim: "${claimText.substring(0, 50)}..."`);
+function evidenceIsSufficient(sources, minimum = 2) {
+  const usable = (sources || []).filter(source => source.fetched !== false && (source.evidence_quote || source.quote_or_summary || '').length > 40);
+  const primary = usable.filter(source => source.authority_level === 'Máxima' || source.source_type === 'oficial');
+  return { usable, primary, sufficient: usable.length >= minimum && primary.length >= 1 };
+}
 
-  // Intentar leer de caché antes de llamar al LLM
-  try {
-    const cached = getClaimCache(claimText);
-    if (cached && cached.reuse_allowed) {
-      const db = getDb();
-      try {
-        const art = db.prepare("SELECT * FROM articles WHERE id = ?").get(cached.previous_article_id);
-        if (art) {
-          console.log(`[Verifier] [Cache HIT] Reutilizando verificación para: "${claimText.substring(0, 50)}..."`);
-          db.close();
-          return {
-            verdict: art.verdict,
-            confidence: art.confidence || 'Alta',
-            verdict_reasoning: art.summary || 'Recuperado de caché',
-            what_is_true: art.what_is_true || '',
-            what_is_false: art.what_is_false || '',
-            what_lacks_context: art.what_lacks_context || '',
-            what_is_not_proven: art.what_is_not_proven || '',
-            cached: true
-          };
-        }
-      } catch (dbErr) {
-        console.warn('[Verifier Cache] Error buscando artículo en DB:', dbErr.message);
-      } finally {
-        if (db) db.close();
-      }
-    }
-  } catch (cacheErr) {
-    console.warn('[Verifier Cache] Error al consultar caché:', cacheErr.message);
+function detectSensitiveMode(claimText) {
+  const text = String(claimText || '').toLowerCase();
+  if (/juez|juzgado|sentencia|investigad|imputad|condenad|fiscal|querella|delito|tribunal/.test(text)) return 'judicial';
+  if (/salud|medic|cura|tratamiento|suplemento|enfermedad/.test(text)) return 'salud';
+  if (/banco|hipoteca|seguro|inversion|prestamo|comision/.test(text)) return 'finanzas';
+  return 'general';
+}
+
+export async function verifyClaim(claimText, sources = [], signal = null) {
+  console.log(`[Verifier] Verificación multiagente: "${claimText.substring(0, 70)}..."`);
+  const cached = getClaimCache(claimText);
+  if (cached?.reuse_allowed && cached.previous_verdict && cached.previous_sources?.length) {
+    return {
+      verdict: cached.previous_verdict,
+      confidence: 'Media',
+      verdict_reasoning: 'Resultado reutilizado de caché exacta. Debe actualizarse si cambió el contexto o la fecha.',
+      what_is_true: '',
+      what_is_false: '',
+      what_lacks_context: '',
+      what_is_not_proven: '',
+      cached: true,
+      previous_sources: cached.previous_sources
+    };
   }
 
-  const prompt = `
-Eres un Auditor de Datos y Veracidad en MATIZA. Tu labor es realizar un contraste analítico, desapasionado y lógico entre el claim y las fuentes oficiales primarias recolectadas.
+  const minimum = Number.parseInt(process.env.MIN_EVIDENCE_SOURCES || '2', 10);
+  const evidence = evidenceIsSufficient(sources, minimum);
+  const mode = detectSensitiveMode(claimText);
+  const compactSources = sources.map((source, index) => ({
+    id: `S${index + 1}`,
+    title: source.title,
+    url: source.url,
+    authority_level: source.authority_level,
+    relation_to_claim: source.relation_to_claim,
+    quote: source.evidence_quote || source.quote_or_summary || '',
+    quote_verified: source.quote_verified !== false
+  }));
 
-CLAIM A VERIFICAR:
-"${claimText}"
+  const agents = [
+    { id: 'support', role: 'Construye el mejor caso posible a favor del claim usando solo las fuentes entregadas.' },
+    { id: 'refute', role: 'Construye el mejor caso posible en contra del claim usando solo las fuentes entregadas.' },
+    { id: 'context', role: 'Detecta omisiones temporales, metodológicas, estadísticas o semánticas que cambien la interpretación.' },
+    { id: 'method', role: 'Audita suficiencia, calidad, independencia y relación directa de las evidencias.' }
+  ];
+  if (mode === 'judicial') agents.push({ id: 'judicial', role: 'Distingue hechos probados, alegaciones, indicios, fase procesal, firmeza y recursos. No asumas que una resolución equivale a verdad absoluta.' });
+  if (mode === 'salud') agents.push({ id: 'health', role: 'Audita evidencia sanitaria, autorización, riesgos y nivel de consenso científico.' });
+  if (mode === 'finanzas') agents.push({ id: 'financial', role: 'Audita costes, incentivos, letra pequeña, regulación y riesgo económico.' });
 
-FUENTES OFICIALES DE EVIDENCIA:
-${JSON.stringify(sources)}
+  const context = { claim: claimText, mode, evidence_sufficient: evidence.sufficient, sources: compactSources };
+  const panel = await runAgentPanel({
+    phaseId: '07-panel',
+    task: 'Evaluar el claim desde posiciones adversariales y metodológicas sin añadir datos externos.',
+    context,
+    agents,
+    signal
+  });
 
---- INSTRUCCIONES ---
-1. Analiza con precisión técnica si el claim es:
-   - "Verdadero": Los hechos afirmados coinciden exactamente con la normativa o datos estadísticos oficiales.
-   - "Falso": Las afirmaciones contradicen o falsean directamente la ley, los datos o la realidad documental.
-   - "Engañoso": Mezcla hechos verdaderos con omisiones o interpretaciones falsas sesgadas para confundir.
-   - "Falta contexto": Requiere perspectiva legal, metodológica o histórica sin la cual la frase induce a conclusiones equivocadas.
-2. Genera un nivel de confianza en el veredicto ("Alta", "Media" o "Baja").
-3. Elabora un resumen técnico de qué parte del claim es cierta, cuál es falsa, qué contexto falta y qué no está probado.
-
-Devuelve un JSON con el formato exacto:
-{
-  "verdict": "Verdadero" | "Falso" | "Engañoso" | "Falta contexto",
-  "confidence": "Alta" | "Media" | "Baja",
-  "verdict_reasoning": "[Explicación lógica paso a paso de cómo las fuentes desmienten o prueban la afirmación]",
-  "what_is_true": "[Qué partes de la afirmación son reales]",
-  "what_is_false": "[Qué partes de la afirmación son mentiras o bulos]",
-  "what_lacks_context": "[Qué contexto legal, temporal o metodológico se omitió]",
-  "what_is_not_proven": "[Qué elementos no se han podido demostrar con las pruebas actuales]"
-}
-`;
+  if (!evidence.sufficient) {
+    return {
+      verdict: 'Sin pruebas suficientes',
+      confidence: 'Baja',
+      verdict_reasoning: `No hay evidencia suficiente y verificable para emitir un veredicto fuerte. Fuentes utilizables: ${evidence.usable.length}; primarias: ${evidence.primary.length}.`,
+      what_is_true: 'No puede determinarse con seguridad con las fuentes actuales.',
+      what_is_false: 'No puede determinarse con seguridad con las fuentes actuales.',
+      what_lacks_context: 'Faltan documentos o datos primarios suficientes.',
+      what_is_not_proven: claimText,
+      sensitive_mode: mode,
+      agent_panel: panel,
+      needs_more_sources: true
+    };
+  }
 
   try {
-    const result = await callGemini(prompt, '07', signal);
-    if (!result || typeof result !== 'object' || !result.verdict || !result.verdict_reasoning) {
-      throw new Error('JSON devuelto por callGemini es inválido o incompleto');
+    const result = await synthesizeAgentPanel({
+      phaseId: '07',
+      objective: 'Emitir un veredicto prudente, explicable y trazable a fuentes concretas.',
+      context,
+      panel,
+      schema: {
+        verdict: 'Verdadero|Falso|Engañoso|Falta contexto|Sin pruebas suficientes|No verificable',
+        confidence: 'Alta|Media|Baja',
+        verdict_reasoning: '...',
+        what_is_true: '...',
+        what_is_false: '...',
+        what_lacks_context: '...',
+        what_is_not_proven: '...',
+        source_refs: ['S1'],
+        disagreements: ['...']
+      },
+      signal
+    });
+    const allowed = ['Verdadero','Falso','Engañoso','Falta contexto','Sin pruebas suficientes','No verificable'];
+    if (!allowed.includes(result.verdict)) result.verdict = 'Sin pruebas suficientes';
+    result.agent_panel = panel;
+    result.sensitive_mode = mode;
+    result.source_refs = Array.isArray(result.source_refs) ? result.source_refs.filter(ref => compactSources.some(source => source.id === ref)) : [];
+    if (result.source_refs.length === 0) {
+      result.confidence = 'Baja';
+      result.verdict = result.verdict === 'Verdadero' || result.verdict === 'Falso' ? 'Sin pruebas suficientes' : result.verdict;
     }
-    console.log(`[Verifier] Veredicto: ${result.verdict}. Confianza: ${result.confidence}`);
     return result;
-  } catch (err) {
-    console.error(`[Verifier] ❌ Fallo crítico en la verificación: ${err.message}`);
-    throw err;
+  } catch (error) {
+    return {
+      verdict: 'Sin pruebas suficientes',
+      confidence: 'Baja',
+      verdict_reasoning: `No se pudo sintetizar el panel: ${error.message}`,
+      what_is_true: '',
+      what_is_false: '',
+      what_lacks_context: 'La síntesis automática falló.',
+      what_is_not_proven: claimText,
+      sensitive_mode: mode,
+      agent_panel: panel,
+      fallback: true
+    };
   }
 }

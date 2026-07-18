@@ -1,59 +1,37 @@
-// run-daily.js - MATIZA Engine Daily Runner (Phase 2 Motor)
-import { argv } from 'node:process';
-import { runPhase } from './lib/phase-runner.js';
-import { safeStringify } from './lib/safe-json.js';
-
 import { detectHotTopics } from './00-hot-topics-cron.js';
+import { getDb } from './config.js';
+import { updateTopicHeader } from './12-topic-updater.js';
+import { mapLimit } from './lib/async-pool.js';
+import { isMainModule } from './lib/is-main.js';
 
-const args = argv.slice(2);
-const isDryRun = args.includes('--dry-run');
+const dryRun = process.argv.includes('--dry-run');
 
-console.log('╔══════════════════════════════════════════════════════╗');
-console.log('║ 📅 MATIZA: EJECUTOR DIARIO DEL MOTOR (DAILY RUNNER)  ║');
-console.log(`║      MODO: ${isDryRun ? 'DRY-RUN (SIMULADO)' : 'REAL'}                       ║`);
-console.log('╚══════════════════════════════════════════════════════╝');
+export async function runDailyPipeline() {
+  const proposals = await detectHotTopics(dryRun);
+  const db = getDb();
+  const activeTopics = db.prepare("SELECT id FROM topics WHERE status = 'activo' ORDER BY updated_at ASC LIMIT ?")
+    .all(Number.parseInt(process.env.DAILY_TOPIC_REFRESH_LIMIT || '10', 10));
+  db.close();
 
-async function runDailyPipeline() {
-  const inputId = `daily-cycle-${Date.now()}`;
-  
-  // Fase 00: Hot Topics
-  const hotTopicsResult = await runPhase('00-hot-topics-cron', inputId, async () => {
-    const topics = await detectHotTopics(isDryRun);
-    return {
-      ok: true,
-      result: {
-        detected_topics: topics
-      }
-    };
-  });
+  let updated = [];
+  if (!dryRun) {
+    updated = await mapLimit(activeTopics, Number.parseInt(process.env.TOPIC_UPDATE_CONCURRENCY || '2', 10), async topic => {
+      await updateTopicHeader(topic.id);
+      return topic.id;
+    });
+  }
 
-  // Fase 12: Topic Updater / Verticals
-  const verticalResult = await runPhase('12-topic-updater', inputId, async () => {
-    return {
-      ok: true,
-      result: {
-        updated_verticals: ["Economía y Hacienda", "Convivencia y Servicios"],
-        status: "Sugeridos para revisión humana"
-      }
-    };
-  });
-
-  const summary = {
-    ok: hotTopicsResult.ok && verticalResult.ok,
-    timestamp: new Date().toISOString(),
-    steps: {
-      '00-hot-topics-cron': hotTopicsResult,
-      '12-topic-updater': verticalResult
-    }
-  };
-
-  console.log('\n========================================================');
-  console.log('🎉 Ciclo Diario Completado con Éxito.');
-  console.log(safeStringify(summary));
-  console.log('========================================================');
+  console.log(JSON.stringify({
+    detected_topic_proposals: proposals.length,
+    proposals_for_review: proposals.filter(topic => ['update_existing', 'propose_new'].includes(topic.recommended_action)).length,
+    refreshed_verticals: updated,
+    dry_run: dryRun
+  }, null, 2));
 }
 
-runDailyPipeline().catch(err => {
-  console.error('[Daily Runner Error]', err);
-  process.exit(1);
-});
+if (isMainModule(import.meta.url)) {
+  runDailyPipeline().catch(error => {
+    console.error('[Daily] Error:', error);
+    process.exit(1);
+  });
+}

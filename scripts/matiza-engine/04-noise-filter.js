@@ -1,57 +1,61 @@
-import { callGemini } from './config.js';
+import { runAgentPanel, synthesizeAgentPanel } from './lib/multi-agent.js';
+import { normalizeText } from './lib/text-utils.js';
 
-export async function filterNoise(itemText, platform, signal = null) {
-  console.log(`[Noise Filter] Evaluando si el item es ruido o contenido no relevante...`);
+export async function filterNoise(itemText, platform, contextOrSignal = {}, maybeSignal = null) {
+  const context = contextOrSignal && typeof contextOrSignal === 'object' && !('aborted' in contextOrSignal) ? contextOrSignal : {};
+  const signal = context === contextOrSignal ? maybeSignal : contextOrSignal;
+  const text = normalizeText(itemText);
+  const hasCommercialDisclosure = /afiliad|patrocin|codigo|descuento|enlace|comision|colaboracion pagada/.test(text);
+  const hasConcretePromise = /cura|garantiza|obligatorio|el mejor|sin riesgo|gratis|rentabilidad|ahorra|reduce|aumenta|elimina/.test(text);
+  const virality = Number(context.virality_score || context.virality || 0);
+  const harm = Number(context.harm_score || context.harm || 0);
 
-  const prompt = `
-Eres un Auditor de Calidad Periodística. Tu tarea es descartar el ruido o contenido comercial/entretenimiento sin relevancia pública de España en el flujo de MATIZA.
+  if (hasCommercialDisclosure && hasConcretePromise && (virality >= 4 || harm >= 5)) {
+    return {
+      is_noise: false,
+      noise_reason: 'Contenido comercial con promesa verificable y potencial impacto; debe analizarse, no descartarse.',
+      keep_monitoring: true,
+      requires_processing: true,
+      deterministic: true
+    };
+  }
 
-TEXTO A ANALIZAR:
-"${itemText}"
-PLATAFORMA: ${platform}
-
---- REGLA DE FILTRADO ---
-Debes marcar como "is_noise": true si el contenido cumple alguna de las siguientes:
-- Contenido comercial menor (reseñas ordinarias de restaurantes, ropa, juguetes).
-- Enlaces promocionales puros de afiliados sin viralidad desmedida ni engaño.
-- Entretenimiento puro sin riesgo de desinformación (chistes, memes, cotilleos ordinarios, deportes).
-- Noticias puramente locales sin impacto social amplio en el resto de España.
-- Opiniones puras que no realizan afirmaciones factuales desmentibles (es decir, debate subjetivo puro sin falsedad de datos).
-- Contenido que no puede ser verificado de ninguna forma empírica (afirmaciones puramente místicas, esotéricas o sobrenaturales).
-
-IMPORTANTE: Las afirmaciones virales, rumores o bulos sociopolíticos sobre temas sensibles como inmigración, ayudas públicas, pensiones, okupación, impuestos, SMI o violencia de género, por muy exagerados, sesgados o infundados que parezcan, NO son ruido. Deben marcarse con "is_noise": false para que el sistema pueda investigarlos y desmentirlos formalmente.
-
-
-Devuelve un JSON con el formato exacto:
-{
-  "is_noise": true|false,
-  "noise_reason": "[Explicación detallada de por qué se considera ruido o contenido útil]",
-  "keep_monitoring": true|false,
-  "requires_processing": true|false
-}
-`;
+  const panel = await runAgentPanel({
+    phaseId: '04-panel',
+    task: 'Clasificar si el contenido es un suceso ordinario y cerrado sin debate (ej. detención común, accidente de tráfico ordinario, noticia policial finalizada) o si contiene una polémica de opinión/hechos abiertos y sensibles que amerite analizarse en Matiza.',
+    context: { text: itemText, platform, metrics: context },
+    agents: [
+      { id: 'noise', role: 'Descarta de inmediato reportajes deportivos, horóscopos, entretenimiento común y noticias de crímenes ordinarios cerrados.' },
+      { id: 'debate-exception', role: 'Busca indicios de que el contenido pertenece a un tema de debate social de fondo o polarización (ej. discusiones sobre leyes, impuestos, inmigración, derechos civiles).' },
+      { id: 'commercial-audit', role: 'Identifica y descarta autopromoción, spam comercial y lanzamientos de productos ordinarios.' }
+    ],
+    signal
+  });
 
   try {
-    const result = await callGemini(prompt, '04', signal);
-    console.log(`[Noise Filter] is_noise: ${result.is_noise}. Razón: ${result.noise_reason}`);
+    const result = await synthesizeAgentPanel({
+      phaseId: '04',
+      objective: 'Emitir una decisión de ruido prudente y reversible.',
+      context: { text: itemText, platform, metrics: context },
+      panel,
+      schema: {
+        is_noise: false,
+        noise_reason: '...',
+        keep_monitoring: true,
+        requires_processing: true,
+        confidence: 0
+      },
+      signal
+    });
+    result.agent_panel = panel;
     return result;
-  } catch (err) {
-    console.warn('[Noise Filter] Fallo en la evaluación con IA. Usando descarte básico por keywords.');
-    const lower = itemText.toLowerCase();
-    
-    // Lista de keywords que implican ruido comercial u opinión subjetiva extrema
-    const noiseKeywords = [
-      'código de descuento', 'enlace de afiliado', 'comprar aquí', 'oferta especial', 'promoción',
-      'fútbol', 'real madrid', 'barça', 'mbappé', 'champions league', 'película', 'estreno', 'horóscopo'
-    ];
-
-    const isNoise = noiseKeywords.some(kw => lower.includes(kw));
-
+  } catch (error) {
     return {
-      is_noise: isNoise,
-      noise_reason: isNoise ? 'Detectado keyword de ruido comercial o entretenimiento deportivo.' : 'Sin indicios evidentes de ruido en el análisis heurístico local.',
-      keep_monitoring: false,
-      requires_processing: !isNoise
+      is_noise: !hasConcretePromise && virality < 3 && harm < 3,
+      noise_reason: `Fallback conservador: ${error.message}`,
+      keep_monitoring: virality >= 3,
+      requires_processing: hasConcretePromise || virality >= 5 || harm >= 5,
+      fallback: true
     };
   }
 }

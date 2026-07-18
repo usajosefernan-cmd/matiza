@@ -1,62 +1,45 @@
-// run-hourly.js - MATIZA Engine Hourly Runner (Phase 2 Motor)
-import { argv } from 'node:process';
-import { runPhase } from './lib/phase-runner.js';
-import { safeStringify } from './lib/safe-json.js';
+import { getDb } from './config.js';
+import { processItem } from './run-item-pipeline.js';
+import { mapLimit } from './lib/async-pool.js';
+import { isMainModule } from './lib/is-main.js';
 
-const args = argv.slice(2);
-const isDryRun = args.includes('--dry-run');
+const args = process.argv.slice(2);
+const dryRun = args.includes('--dry-run');
+const limitArg = args.find(arg => arg.startsWith('--limit='));
+const maxItems = Number.parseInt(limitArg?.split('=')[1] || process.env.MAX_ITEMS_PER_CYCLE || '20', 10);
+const concurrency = Number.parseInt(process.env.ITEM_CONCURRENCY || '3', 10);
 
-console.log('╔══════════════════════════════════════════════════════╗');
-console.log('║ 🕒 MATIZA: EJECUTOR HORARIO DE RADAR (HOURLY RUNNER) ║');
-console.log(`║      MODO: ${isDryRun ? 'DRY-RUN (SIMULADO)' : 'REAL'}                       ║`);
-console.log('╚══════════════════════════════════════════════════════╝');
+export async function runHourlyPipeline() {
+  const db = getDb();
+  const items = db.prepare(`
+    SELECT * FROM scraped_items
+    WHERE status IN ('pendiente', 'recibido', 'monitorizando')
+    ORDER BY COALESCE(virality_score, 0) DESC, COALESCE(risk_score, 0) DESC, created_at ASC
+    LIMIT ?
+  `).all(maxItems);
+  db.close();
 
-async function runHourlyPipeline() {
-  const inputId = `hourly-radar-${Date.now()}`;
-  
-  // Paso 1: Recoger señales recientes (simulado en dry-run / local)
-  const signalsResult = await runPhase('radar-signals', inputId, async () => {
-    return {
-      ok: true,
-      result: {
-        signals_scraped: 3,
-        items: [
-          { id: "sig-1", text: "Afirman que los autónomos tendrán una cuota mínima de 500 euros en 2027.", platform: "X" },
-          { id: "sig-2", text: "El Gobierno aprueba una ayuda directa de 10.000€ a todos los jóvenes sin condiciones.", platform: "TikTok" }
-        ]
-      }
-    };
-  });
-
-  // Paso 2: Aplicar relevance gate (01-relevance-gate)
-  const relevanceResult = await runPhase('01-relevance-gate', inputId, async () => {
-    return {
-      ok: true,
-      result: {
-        evaluated_signals: [
-          { id: "sig-1", should_process: true, priority: "alta", reason: "Impacto relevante en sector autónomos y cuotas" },
-          { id: "sig-2", should_process: true, priority: "media", reason: "Bulo de alta viralidad en juventud" }
-        ]
-      }
-    };
-  });
-
+  console.log(`[Hourly] Items=${items.length}, concurrencia=${concurrency}, dryRun=${dryRun}`);
+  const results = await mapLimit(items, concurrency, item => processItem(item, { dryRun }));
   const summary = {
-    ok: signalsResult.ok && relevanceResult.ok,
-    timestamp: new Date().toISOString(),
-    steps: {
-      'radar-signals': signalsResult,
-      '01-relevance-gate': relevanceResult
-    }
+    processed: results.length,
+    completed: results.filter(result => result.article_id || result.dry_run).length,
+    stopped: results.filter(result => result.stopped_at).length,
+    failed_quality: results.filter(result => result.status === 'necesita_revision_ia').length,
+    results: results.map(result => ({
+      item_id: result.item_id,
+      article_id: result.article_id,
+      status: result.status,
+      stopped_at: result.stopped_at,
+      ok: result.ok
+    }))
   };
-
-  console.log('\n========================================================');
-  console.log('🎉 Ciclo Horario Completado con Éxito.');
-  console.log(safeStringify(summary));
-  console.log('========================================================');
+  console.log(JSON.stringify(summary, null, 2));
 }
 
-runHourlyPipeline().catch(err => {
-  console.error('[Hourly Runner Error]', err);
-  process.exit(1);
-});
+if (isMainModule(import.meta.url)) {
+  runHourlyPipeline().catch(error => {
+    console.error('[Hourly] Error:', error);
+    process.exit(1);
+  });
+}

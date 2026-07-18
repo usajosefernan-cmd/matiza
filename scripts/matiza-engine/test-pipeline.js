@@ -2,7 +2,7 @@ import { getDb } from './config.js';
 import { execSync } from 'node:child_process';
 
 const db = getDb();
-const TEST_FIXTURE_URL = 'https://x.com/bulo_falso/status/1234';
+const TEST_FIXTURE_URL = 'https://www.reddit.com/r/es/comments/18y3nza/la_ue_prohibir%C3%A1_reparar_coches_de_m%C3%A1s_de_15_a%C3%B1os/';
 
 // Limpiar fixtures anteriores
 console.log('[Test Pipeline] Limpiando fixtures de pruebas anteriores...');
@@ -34,13 +34,13 @@ console.log('[Test Pipeline] Insertando claim de prueba en user_submissions y sc
 const subId = `test-sub-${Date.now()}`;
 db.prepare(`
   INSERT INTO user_submissions (id, submitted_url, submitted_text, detected_claim, suggested_topic_id, virality_status, relevance_score, status, reason, created_at)
-  VALUES (?, 'https://x.com/bulo_falso/status/1234', 'Aseguran que los inmigrantes reciben una paga de 4.000€ mensuales nada más llegar a España sin cotizar.', 'Paga de 4.000€ a inmigrantes', null, 'Pendiente', 0.0, 'recibido', 'Test', datetime('now'))
-`).run(subId);
+  VALUES (?, ?, 'Aseguran que la Unión Europea prohibirá reparar en talleres españoles los coches que tengan más de 15 años de antigüedad.', 'Prohibición UE reparación coches de más de 15 años', null, 'Pendiente', 0.0, 'recibido', 'Test', datetime('now'))
+`).run(subId, TEST_FIXTURE_URL);
 
 db.prepare(`
   INSERT INTO scraped_items (id, platform, url, text, author_public_name, metrics_json, detected_claim, suggested_topic, virality_score, risk_score, status, created_at)
-  VALUES (?, 'Usuario', 'https://x.com/bulo_falso/status/1234', 'Aseguran que los inmigrantes reciben una paga de 4.000€ mensuales nada más llegar a España sin cotizar.', 'Usuario Anónimo', '{"imageUrl":"https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5"}', 'Paga de 4.000€ a inmigrantes', 'General', 5.0, 5.0, 'pendiente', datetime('now'))
-`).run(subId);
+  VALUES (?, 'Usuario', ?, 'Aseguran que la Unión Europea prohibirá reparar en talleres españoles los coches que tengan más de 15 años de antigüedad.', 'Usuario Anónimo', '{"imageUrl":"https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5"}', 'Prohibición UE reparación coches de más de 15 años', 'General', 5.0, 5.0, 'pendiente', datetime('now'))
+`).run(subId, TEST_FIXTURE_URL);
 
 db.close();
 

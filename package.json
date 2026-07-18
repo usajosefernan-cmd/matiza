@@ -2,7 +2,7 @@
   "name": "matiza",
   "type": "module",
   "version": "0.1.0",
-  "description": "Copiloto de contexto y decisión. Construido por Antigravity y automatizado por Hermes en una VPS Oracle.",
+  "description": "Copiloto de contexto y decisión. Construido y automatizado localmente en Antigravity.",
   "keywords": [
     "matiza",
     "ai-news",

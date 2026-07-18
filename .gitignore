@@ -12,3 +12,10 @@ dist/
 *.db-wal
 *.db-shm
 *~syncthing~*
+
+# Temporary files and uploads
+scratch/
+public/uploads/
+.agents/
+
+

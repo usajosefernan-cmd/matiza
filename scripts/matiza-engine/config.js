@@ -225,6 +225,8 @@ export function createController(timeoutMs, externalSignal) {
   return { signal: controller.signal, cleanup };
 }
 
+let inferenceQueuePromise = Promise.resolve();
+
 export async function callGemini(promptText, phaseId = null, options = {}) {
   const tStartCall = Date.now();
   
@@ -240,6 +242,17 @@ export async function callGemini(promptText, phaseId = null, options = {}) {
     abortErr.name = 'AbortError';
     throw abortErr;
   }
+
+  // Esperar turno en la cola de inferencia local para evitar rate limits HTTP 429
+  await new Promise(resolve => {
+    inferenceQueuePromise = inferenceQueuePromise.then(async () => {
+      resolve();
+      // Delay de separación de 1.5 segundos para espaciar ráfagas concurrentes
+      await new Promise(r => setTimeout(r, 1500));
+    }).catch(() => {
+      resolve();
+    });
+  });
 
               
 
@@ -271,11 +284,11 @@ export async function callGemini(promptText, phaseId = null, options = {}) {
       'auto': 'gemini-2.5-flash'
     },
     openrouter: {
-      'auto:fast': 'google/gemini-2.5-flash',
-      'auto:balanced': 'google/gemini-2.5-flash',
-      'auto:smart': 'google/gemini-2.5-pro',
-      'auto:reliable': 'google/gemini-2.5-pro',
-      'auto': 'google/gemini-2.5-flash'
+      'auto:fast': 'meta-llama/llama-3.1-8b-instruct:free',
+      'auto:balanced': 'meta-llama/llama-3.1-8b-instruct:free',
+      'auto:smart': 'qwen/qwen-2.5-72b-instruct:free',
+      'auto:reliable': 'qwen/qwen-2.5-72b-instruct:free',
+      'auto': 'google/gemma-2-9b-it:free'
     },
     groq: {
       'auto:fast': 'llama-3.1-8b-instant',
@@ -323,247 +336,77 @@ export async function callGemini(promptText, phaseId = null, options = {}) {
     return cleaned;
   };
 
-  // 0. Intentar usar FreeLLMAPI local si el proveedor es freellmapi
-  const freeLlmApiKey = process.env.FREELLMAPI_API_KEY;
-  const freeLlmBaseUrl = process.env.FREELLMAPI_BASE_URL || 'http://localhost:3001/v1';
-  if (provider === 'freellmapi' && freeLlmApiKey) {
-    console.log(`[FreeLLMAPI] ⚡ [Fase ${phaseId || 'Global'}] Despachando inferencia (Modelo: ${model} | Temp: ${temperature})`);
-    const { signal: activeSignal, cleanup } = createController(90000, externalSignal);
-    try {
-      let response = await fetchWithRetry(`${freeLlmBaseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${freeLlmApiKey}`
-        },
-        body: JSON.stringify({
-          model: model,
-          messages: [{ role: 'user', content: promptText }],
-          temperature: temperature,
-          response_format: { type: 'json_object' }
-        }),
-        signal: activeSignal
-      });
 
-      if (!response.ok && (response.status === 429 || response.status === 404)) {
-        const errText = await response.text();
-        console.warn(`[FreeLLMAPI] ⚠️ Error ${response.status} llamando a ${model}. Reintentando con enrutamiento 'auto'...`);
-        response = await fetchWithRetry(`${freeLlmBaseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${freeLlmApiKey}`
-          },
-          body: JSON.stringify({
-            model: 'auto',
-            messages: [{ role: 'user', content: promptText }],
-            temperature: temperature,
-            response_format: { type: 'json_object' }
-          }),
-          signal: activeSignal
-        });
-      }
-      cleanup();
-
-      if (response.ok) {
-        const data = await response.json();
-        const resolvedModelName = data?._routed_via ? `${data._routed_via.platform}/${data._routed_via.model}` : model;
-        console.log(`[FreeLLMAPI] ✨ [Fase ${phaseId || 'Global'}] Completado con éxito ➔ Enrutado vía: ${resolvedModelName}`);
-        
-        let actualProvider = 'freellmapi';
-        let actualModel = model;
-        if (data?._routed_via) {
-          actualProvider = data._routed_via.platform || 'freellmapi';
-          actualModel = data._routed_via.model || model;
-        }
-
-        global.lastInferenceTelemetry = {
-          provider: actualProvider,
-          model: actualModel,
-          durationMs: Date.now() - tStartCall
-        };
-
-        const rawText = data?.choices?.[0]?.message?.content || '';
-        const cleanText = rawText.trim();
-        const extracted = extractJson(cleanText);
-        if (extracted) return JSON.parse(extracted);
-        const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) return JSON.parse(jsonMatch[0]);
-      } else {
-        const errBody = await response.text();
-        console.warn(`[FreeLLMAPI] ⚠️ HTTP ${response.status} - ${errBody.substring(0, 150)}`);
-      }
-    } catch (err) {
-      cleanup();
-      console.error(`[FreeLLMAPI] ❌ Error o Timeout en FreeLLMAPI: ${err.message}`);
-      if (err.name === 'AbortError' || (externalSignal && externalSignal.aborted)) {
-        throw err;
-      }
-    }
+  console.log(`[Antigravity IA Local] ⚡ [Fase ${phaseId || 'Global'}] Delegando inferencia a la IA de Antigravity (Chat)...`);
+  
+  const scratchDir = path.resolve('scratch');
+  if (!fs.existsSync(scratchDir)) {
+    fs.mkdirSync(scratchDir, { recursive: true });
   }
-
-  // 1. Intentar usar la API de Gemini directa de Google (Fallback 1)
-  const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (geminiKey) {
-    const physicalModel = getFallbackModel('gemini', model);
-    console.log(`[Gemini API] ⚠️ [Fase ${phaseId || 'Global'}] Fallback a Gemini Directo (Modelo: ${physicalModel})`);
-    const { signal: activeSignal, cleanup } = createController(15000, externalSignal);
-    try {
-      const response = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${physicalModel}:generateContent?key=${geminiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: promptText }] }],
-          generationConfig: { temperature: temperature, responseMimeType: 'application/json' }
-        }),
-        signal: activeSignal
-      });
-      cleanup();
-
-      if (response.ok) {
-        const data = await response.json();
-        
-        global.lastInferenceTelemetry = {
-          provider: 'gemini',
-          model: physicalModel,
-          durationMs: Date.now() - tStartCall
-        };
-
-        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        const cleanText = rawText.trim();
-        const extracted = extractJson(cleanText);
-        if (extracted) return JSON.parse(extracted);
-        const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) return JSON.parse(jsonMatch[0]);
-      } else {
-        const errBody = await response.text();
-        console.warn(`[Gemini API] ⚠️ HTTP ${response.status} - ${errBody.substring(0, 150)}`);
-      }
-    } catch (err) {
-      cleanup();
-      console.error(`[Gemini API] ❌ Error en Gemini Directo: ${err.message}`);
-      if (err.name === 'AbortError' || (externalSignal && externalSignal.aborted)) {
-        throw err;
-      }
-    }
-  }
-
-  // 2. Fallback de OpenRouter
-  const openRouterKey = process.env.OPENROUTER_API_KEY;
-  if (openRouterKey) {
-    const physicalOpenRouterModel = getFallbackModel('openrouter', model);
-    const modelsToTry = [physicalOpenRouterModel];
-    if (!physicalOpenRouterModel.endsWith(':free')) {
-      modelsToTry.push('meta-llama/llama-3-8b-instruct:free');
+  
+  const reqId = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const requestPath = path.join(scratchDir, `ia_request_${reqId}.json`);
+  const responsePath = path.join(scratchDir, `ia_response_${reqId}.json`);
+  
+  const requestData = {
+    id: reqId,
+    phaseId,
+    prompt: promptText,
+    timestamp: new Date().toISOString()
+  };
+  
+  fs.writeFileSync(requestPath, JSON.stringify(requestData, null, 2), 'utf-8');
+  console.log(`[Antigravity IA Local] Petición ${reqId} guardada en scratch/. Esperando que el agente Antigravity responda en el chat...`);
+  
+  const timeoutMs = 120000;
+  const pollInterval = 1000;
+  const startTime = Date.now();
+  
+  while (true) {
+    if (externalSignal && externalSignal.aborted) {
+      try { if (fs.existsSync(requestPath)) fs.unlinkSync(requestPath); } catch (e) {}
+      const abortErr = new Error('Request aborted.');
+      abortErr.name = 'AbortError';
+      throw abortErr;
     }
     
-    for (const mToTry of modelsToTry) {
-      console.log(`[OpenRouter API] ⚠️ [Fase ${phaseId || 'Global'}] Fallback a OpenRouter (Modelo: ${mToTry})`);
-      const { signal: activeSignal, cleanup } = createController(15000, externalSignal);
+    if (fs.existsSync(responsePath)) {
       try {
-        const response = await fetchWithRetry('https://openrouter.ai/api/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${openRouterKey}`,
-            'HTTP-Referer': 'https://143-47-35-167.sslip.io',
-            'X-Title': 'Matiza Engine'
-          },
-          body: JSON.stringify({
-            model: mToTry,
-            messages: [{ role: 'user', content: promptText }],
-            temperature: temperature,
-            response_format: { type: 'json_object' }
-          }),
-          signal: activeSignal
-        });
-        await new Promise(r => setTimeout(r, 100)); // gap para evitar rate-limits de ráfaga
-        cleanup();
-
-        if (response.ok) {
-          const data = await response.json();
+        const responseContent = fs.readFileSync(responsePath, 'utf-8');
+        const responseData = JSON.parse(responseContent);
+        
+        // Verificar que corresponde a nuestra petición activa
+        if (responseData.id === reqId || responseData.request_id === reqId || !responseData.id) {
+          console.log(`[Antigravity IA Local] ✨ [Fase ${phaseId || 'Global'}] Inferencia resuelta localmente por la IA de Antigravity (Chat).`);
           
           global.lastInferenceTelemetry = {
-            provider: 'openrouter',
-            model: mToTry,
+            provider: 'antigravity',
+            model: 'Antigravity Chat Agent',
             durationMs: Date.now() - tStartCall
           };
-
-          const rawText = data?.choices?.[0]?.message?.content || '';
+          
+          // Borrar archivos
+          try { fs.unlinkSync(requestPath); } catch (e) {}
+          try { fs.unlinkSync(responsePath); } catch (e) {}
+          
+          const rawText = responseData.response || responseData.text || responseContent;
           const cleanText = rawText.trim();
           const extracted = extractJson(cleanText);
           if (extracted) return JSON.parse(extracted);
           const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
           if (jsonMatch) return JSON.parse(jsonMatch[0]);
-        } else {
-          const errText = await response.text();
-          console.warn(`[OpenRouter API Fallback] ⚠️ HTTP ${response.status} al llamar a ${mToTry}. Error: ${errText.substring(0, 150)}`);
-          if (response.status === 402 && mToTry !== modelsToTry[modelsToTry.length - 1]) {
-            console.log(`[OpenRouter API Fallback] Intentando con el modelo gratuito de OpenRouter de respaldo...`);
-            continue;
-          }
+          return responseData; // Retornar el objeto si ya es JSON parseado
         }
       } catch (err) {
-        cleanup();
-        console.warn(`[OpenRouter API Fallback] ⚠️ Error al conectar: ${err.message}`);
-        if (err.name === 'AbortError' || (externalSignal && externalSignal.aborted)) {
-          throw err;
-        }
+        // En proceso de escritura, reintentar en el siguiente tick
       }
     }
-  }
-
-  // 3. Fallback de Groq
-  const groqKey = process.env.GROQ_API_KEY;
-  if (groqKey) {
-    const groqModel = getFallbackModel('groq', model);
-    console.log(`[Groq API] ⚠️ [Fase ${phaseId || 'Global'}] Fallback a Groq (Modelo: ${groqModel})`);
-    const { signal: activeSignal, cleanup } = createController(15000, externalSignal);
-    try {
-      const response = await fetchWithRetry('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${groqKey}`
-        },
-        body: JSON.stringify({
-          model: groqModel,
-          messages: [{ role: 'user', content: promptText }],
-          temperature: temperature,
-          response_format: { type: 'json_object' }
-        }),
-        signal: activeSignal
-      });
-      cleanup();
-
-      if (response.ok) {
-        const data = await response.json();
-        
-        global.lastInferenceTelemetry = {
-          provider: 'groq',
-          model: groqModel,
-          durationMs: Date.now() - tStartCall
-        };
-
-        const rawText = data?.choices?.[0]?.message?.content || '';
-        const cleanText = rawText.trim();
-        const extracted = extractJson(cleanText);
-        if (extracted) return JSON.parse(extracted);
-        const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) return JSON.parse(jsonMatch[0]);
-      } else {
-        const errText = await response.text();
-        console.warn(`[Groq API Fallback] ⚠️ HTTP ${response.status}. Error: ${errText.substring(0, 150)}`);
-      }
-    } catch (err) {
-      cleanup();
-      console.warn(`[Groq API Fallback] ⚠️ Error en Groq: ${err.message}`);
-      if (err.name === 'AbortError' || (externalSignal && externalSignal.aborted)) {
-        throw err;
-      }
+    
+    if (Date.now() - startTime > timeoutMs) {
+      try { if (fs.existsSync(requestPath)) fs.unlinkSync(requestPath); } catch (e) {}
+      throw new Error(`[Antigravity IA Local] Timeout esperando la respuesta del agente Antigravity en el chat.`);
     }
+    
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
   }
-
-  global.lastInferenceTelemetry = null;
-  throw new Error('Todos los proveedores de inferencia (Gemini, OpenRouter, Groq) han fallado o no tienen API Key.');
 }

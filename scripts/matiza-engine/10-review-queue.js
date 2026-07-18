@@ -34,13 +34,9 @@ export function queueForReview(articleId, reviewerNotes = '') {
       reviewerNotes || 'Autogenerado por el pipeline del motor MATIZA. Requiere revisión editorial rápida.'
     );
 
-    // 3. Asegurar que el estado del artículo es borrador (sólo si no se forzó su publicación como publicado)
-    if (art.status !== 'publicado') {
-      db.prepare("UPDATE articles SET status = 'borrador', human_review_required = 1 WHERE id = ?").run(articleId);
-      console.log(`[Review Queue] ✅ Registro de revisión ${reviewId} creado. Artículo establecido como borrador.`);
-    } else {
-      console.log(`[Review Queue] ✅ Registro de revisión ${reviewId} creado. El artículo permanece como PUBLICADO de forma automática.`);
-    }
+    // 3. Ningún contenido generado por IA puede conservarse como publicado sin aprobación humana explícita.
+    db.prepare("UPDATE articles SET status = CASE WHEN status = 'necesita_revision_ia' THEN status ELSE 'borrador' END, human_review_required = 1 WHERE id = ?").run(articleId);
+    console.log(`[Review Queue] ✅ Registro de revisión ${reviewId} creado. Publicación bloqueada hasta aprobación humana.`);
     return {
       review_id: reviewId,
       status: 'success'

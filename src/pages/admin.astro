@@ -938,12 +938,12 @@ const getVerdictClass = (verdict) => {
               <span class="terminal-dot red" style="width: 8px; height: 8px; border-radius: 50%; background: #ff5f56; display: inline-block;"></span>
               <span class="terminal-dot yellow" style="width: 8px; height: 8px; border-radius: 50%; background: #ffbd2e; display: inline-block;"></span>
               <span class="terminal-dot green" style="width: 8px; height: 8px; border-radius: 50%; background: #27c93f; display: inline-block;"></span>
-              <span style="font-family: monospace; font-size: 0.75rem; color: #00ffc4; margin-left: 0.5rem; font-weight: bold;">hermes@vps:~/logs$ tail -f pipeline.log</span>
+              <span style="font-family: monospace; font-size: 0.75rem; color: #00ffc4; margin-left: 0.5rem; font-weight: bold;">antigravity@local:~/logs$ tail -f pipeline.log</span>
             </div>
             <span id="live-logs-status" style="color: #00ffc4; font-family: monospace; font-size: 0.7rem; font-weight: bold; animation: pulse 1.5s infinite;">CONECTADO (POLLING)</span>
           </div>
           <div class="terminal-body" id="live-terminal-body" style="background: #05070e; height: 500px; overflow-y: auto; padding: 1.5rem; font-family: monospace; font-size: 0.75rem; color: #a9b2c3; line-height: 1.6; border-radius: 0 0 12px 12px; scroll-behavior: smooth; text-align: left;">
-            <div style="color: var(--text-muted);">> Cargando logs del motor Hermes...</div>
+            <div style="color: var(--text-muted);">> Cargando logs del motor local...</div>
           </div>
         </div>
       </div>
@@ -2011,7 +2011,7 @@ const getVerdictClass = (verdict) => {
     termStatus.innerText = 'EJECUTANDO';
     termStatus.style.color = 'var(--neon-amber)';
 
-    terminal.innerHTML = '<div style="color: var(--neon-blue);">> Conectando con el motor de la VPS y preparando flujo...</div>';
+    terminal.innerHTML = '<div style="color: var(--neon-blue);">> Conectando con el motor local y preparando flujo...</div>';
 
     try {
       let response = await fetch(`${cleanBase}/api/run-job/`, {
@@ -2087,7 +2087,7 @@ const getVerdictClass = (verdict) => {
         }
       }
     } catch (err) {
-      terminal.innerHTML += `<div style="color: var(--neon-rose);">> Error de conexión con la API de la VPS: ${err.message}</div>`;
+      terminal.innerHTML += `<div style="color: var(--neon-rose);">> Error de conexión con la API del motor local: ${err.message}</div>`;
       termStatus.innerText = 'ERROR';
       termStatus.style.color = '#ff3366';
     } finally {

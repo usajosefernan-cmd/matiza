@@ -1,98 +1,158 @@
-import { callGemini } from './config.js';
+import { runAgentPanel, synthesizeAgentPanel } from './lib/multi-agent.js';
+import { clamp, normalizeText } from './lib/text-utils.js';
+
+function metricValue(metrics, keys) {
+  for (const key of keys) {
+    const value = Number(metrics?.[key]);
+    if (Number.isFinite(value)) return value;
+  }
+  return 0;
+}
+
+function viralityFromMetrics(metrics = {}) {
+  const views = metricValue(metrics, ['views', 'view_count', 'plays', 'reach', 'impressions']);
+  const likes = metricValue(metrics, ['likes', 'like_count']);
+  const shares = metricValue(metrics, ['shares', 'reposts', 'retweets']);
+  const comments = metricValue(metrics, ['comments', 'replies']);
+  const followers = metricValue(metrics, ['followers', 'author_followers']);
+  const weighted = Math.log10(1 + views) * 1.7 + Math.log10(1 + shares) * 1.5 + Math.log10(1 + comments) + Math.log10(1 + likes) * 0.5 + Math.log10(1 + followers) * 0.3;
+  return clamp(weighted, 0, 10);
+}
+
+function deterministicSignals(itemText, platform, metrics = {}) {
+  const text = normalizeText(itemText);
+  const hasConcreteClaim = /\b(\d+[.,]?\d*%?|millones?|euros?|anos?|meses?|ley|decreto|sentencia|estudio|datos?|obligatorio|prohibido|cura|provoca|aumenta|reduce)\b/i.test(text);
+  
+  // Detección explícita de las excepciones del plan (salud, dinero, estafas, violencia, elecciones, menores)
+  const isCriticalTopic = /\b(salud|tratamiento|cura|cancer|vacuna|estafa|fraude|dinero|robo|euros|violencia|agresion|elecciones|votar|pucherazo|menor|menores|seguridad|armas)\b/i.test(text);
+  const hasPublicImpact = isCriticalTopic || /\b(impuestos?|derechos?|empleo|vivienda|justicia|sanidad|pensiones?|ayudas?|consumo)\b/i.test(text);
+  
+  const isPromotion = /\b(descuento|codigo|enlace|afiliado|patrocinado|compra|oferta|solo hoy|link en bio)\b/i.test(text);
+  const isPureOpinion = /\b(creo|pienso|me parece|opino|para mi|me gusta|no me gusta)\b/i.test(text) && !hasConcreteClaim;
+  const virality = viralityFromMetrics(metrics);
+  return { text, hasConcreteClaim, hasPublicImpact, isPromotion, isPureOpinion, virality, platform, isCriticalTopic };
+}
 
 export async function evaluateRelevance(itemText, platform, metrics = {}, signal = null) {
   console.log(`[Relevance Gate] Evaluando relevancia para item de ${platform}...`);
+  const deterministic = deterministicSignals(itemText, platform, metrics);
+  
+  const minimumVirality = Number.parseFloat(process.env.MIN_VIRALITY_SCORE || '3.5');
+  const minimumInterest = Number.parseFloat(process.env.MIN_PUBLIC_INTEREST_SCORE || '5.5');
 
-  const prompt = `
-Eres un Analista Senior de Desinformación e Interés Público en España. Tu misión es filtrar el ruido del radar y evaluar si el siguiente claim/texto amerita ser verificado como desinformación o bulo.
+  if (deterministic.isPureOpinion && deterministic.virality < minimumVirality) {
+    return {
+      should_process: false,
+      reason: 'Opinión no verificable y sin señales suficientes de impacto o viralidad.',
+      priority: 'descartar',
+      public_interest_score: 1,
+      virality_score: deterministic.virality,
+      harm_score: 1,
+      verification_value_score: 1,
+      commercial_noise_score: deterministic.isPromotion ? 8 : 1,
+      relevance_rating: 10,
+      recommended_action: 'ignore',
+      deterministic_gate: true
+    };
+  }
 
-TEXTO/CLAIM DETECTADO:
-"${itemText}"
-PLATAFORMA: ${platform}
-MÉTRICAS: ${JSON.stringify(metrics)}
+  const agents = [
+    { id: 'public-interest', role: 'Evalúa si el asunto constituye un tema de debate social sensible, controvertido, polarizante o de actualidad candente en España.' },
+    { id: 'harm', role: 'Evalúa si la polémica o bulo fomenta conflicto, desconfianza en instituciones, división social o afecta derechos y bienestar público.' },
+    { id: 'verifiability', role: 'Evalúa si el tema contiene matices complejos, sesgos de opinión disfrazados de datos o información conflictiva que requiera ser contrastada y aclarada.' },
+    { id: 'noise', role: 'Filtra y descarta de inmediato sucesos ordinarios cerrados (sentencias definitivas, detenciones cotidianas, sucesos de tráfico comunes) y noticias ordinarias sin controversia o debate social.' }
+  ];
 
---- REGLAS DE OBLIGADO CUMPLIMIENTO ---
-1. DESCARTA NOTICIAS ESTÁNDAR Y REPORTAJES PERIODÍSTICOS: Si el texto es una noticia informativa ordinaria de la prensa profesional (ej: crónicas judiciales ordinarias, reportajes de actualidad, declaraciones parlamentarias legítimas), debes descartarla (should_process = false, recommended_action = "ignore"). No somos un diario de noticias generalistas.
-2. ENFÓCATE EN BULOS Y DESINFORMACIÓN: Solo debes procesar claims que contengan sospechas razonables de ser bulos, falsedades virales, datos manipulados o desinformación en redes sociales que afecten a verticales clave (Vivienda/Okupación, Pensiones, Inmigración/MENAs, SMI/Empleo, Sanidad Pública).
-3. VERIFICABILIDAD: El claim debe ser contrastable con datos oficiales del BOE, INE, Seguridad Social u otros registros primarios.
-
-Devuelve un objeto JSON con el siguiente formato exacto:
-{
-  "should_process": true|false,
-  "reason": "[Explicación de la decisión en base a los criterios]",
-  "priority": "alta" | "media" | "baja" | "descartar",
-  "public_interest_score": [0.0 a 10.0],
-  "virality_score": [0.0 a 10.0],
-  "harm_score": [0.0 a 10.0],
-  "verification_value_score": [0.0 a 10.0],
-  "commercial_noise_score": [0.0 a 10.0],
-  "recommended_action": "process" | "queue" | "ignore" | "monitor_only"
-}
-`;
+  const context = { text: itemText, platform, metrics, deterministic };
+  const panel = await runAgentPanel({
+    phaseId: '01-panel',
+    task: 'Evaluar si el item es un tema sensible de debate y controversia social en España idóneo para Matiza (vivienda, inmigración, subsidios, impuestos, derechos, reformas), o si es ruido de sucesos cotidianos cerrados que debe descartarse.',
+    context,
+    agents,
+    signal
+  });
 
   try {
-    const result = await callGemini(prompt, '01', signal);
-    console.log(`[Relevance Gate] Decisión IA: ${result.recommended_action}. should_process: ${result.should_process}`);
+    const result = await synthesizeAgentPanel({
+      phaseId: '01',
+      objective: 'Emitir una decisión de triage prudente y cuantificada.',
+      context,
+      panel,
+      schema: {
+        should_process: true,
+        reason: '...',
+        priority: 'alta|media|baja|descartar',
+        public_interest_score: 0,
+        virality_score: 0,
+        harm_score: 0,
+        verification_value_score: 0,
+        commercial_noise_score: 0,
+        recommended_action: 'process|queue|ignore|monitor_only'
+      },
+      signal
+    });
+
+    result.public_interest_score = clamp(result.public_interest_score, 0, 10);
+    result.virality_score = Math.max(clamp(result.virality_score, 0, 10), deterministic.virality);
+    result.harm_score = clamp(result.harm_score, 0, 10);
+    result.verification_value_score = clamp(result.verification_value_score, 0, 10);
+    result.commercial_noise_score = clamp(result.commercial_noise_score, 0, 10);
+
+    // Calcular el score total de relevancia de 0 a 100 de forma ponderada
+    const totalScore = (
+      result.public_interest_score * 3.0 +
+      result.virality_score * 2.0 +
+      result.harm_score * 2.0 +
+      result.verification_value_score * 2.0 +
+      (10 - result.commercial_noise_score) * 1.0
+    );
+    result.relevance_rating = Math.min(100, Math.max(0, Math.round(totalScore)));
+
+    // Determinar la acción exacta según la rúbrica numérica de puntuación del plan
+    if (result.relevance_rating >= 80) {
+      result.recommended_action = 'process';
+      result.priority = 'alta';
+    } else if (result.relevance_rating >= 60) {
+      result.recommended_action = 'queue';
+      result.priority = 'media';
+    } else if (result.relevance_rating >= 40) {
+      result.recommended_action = 'monitor_only';
+      result.priority = 'baja';
+    } else {
+      result.recommended_action = 'ignore';
+      result.priority = 'descartar';
+    }
+
+    // Excepciones especiales: Investigar ahora incluso con baja viralidad si es crítico
+    if (deterministic.isCriticalTopic && result.relevance_rating >= 40) {
+      console.log('[Relevance Gate] Excepción temática crítica detectada (salud/estafas/dinero). Investigar ahora.');
+      result.recommended_action = 'process';
+      result.priority = 'alta';
+      result.should_process = true;
+    } else {
+      result.should_process = Boolean(
+        result.relevance_rating >= 60 && 
+        result.verification_value_score >= 4.5 && 
+        !deterministic.isPromotion
+      );
+    }
+
+    result.agent_panel = panel;
     return result;
-  } catch (err) {
-    console.warn(`[Relevance Gate] Fallo al evaluar relevancia con IA: ${err.message}. Usando heurística local restrictiva.`);
-    // Heurística local restrictiva de fallback
-    const textLower = itemText.toLowerCase();
-    const isPrensa = platform.toLowerCase().includes('prensa') || platform.toLowerCase().includes('rss');
-    
-    // Si es prensa generalista, por defecto ignoramos a menos que se hable explícitamente de bulo o desinformación
-    const mentionsDesinfo = textLower.includes('bulo') || textLower.includes('mentira') || textLower.includes('falsedad') || textLower.includes('desmentido') || textLower.includes('fake');
-    
-    if (isPrensa && !mentionsDesinfo) {
-      return {
-        should_process: false,
-        reason: 'Descartado heurísticamente: noticia informativa de prensa sin indicios explícitos de bulo.',
-        priority: 'descartar',
-        public_interest_score: 1.0,
-        virality_score: 1.0,
-        harm_score: 1.0,
-        verification_value_score: 1.0,
-        commercial_noise_score: 1.0,
-        recommended_action: 'ignore'
-      };
-    }
-
-    let interest = 3.0;
-    let harm = 2.0;
-    let commNoise = 1.0;
-    let valVerify = 5.0;
-
-    if (textLower.includes('ley') || textLower.includes('boe') || textLower.includes('gobierno')) {
-      interest = 6.0;
-      harm = 4.0;
-      valVerify = 8.0;
-    }
-    if (textLower.includes('okupa') || textLower.includes('okupación')) {
-      interest = 9.0;
-      harm = 8.0;
-      valVerify = 8.0;
-    }
-    if (textLower.includes('ayuda') || textLower.includes('subsidio') || textLower.includes('inmigra') || textLower.includes('menas')) {
-      interest = 8.8;
-      harm = 8.5;
-      valVerify = 7.5;
-    }
-    if (textLower.includes('descuento') || textLower.includes('enlace en mi bio') || textLower.includes('compra')) {
-      commNoise = 9.0;
-    }
-
-    const shouldProcess = (interest >= 7.5 || harm >= 7.5) && commNoise < 7.0 && valVerify >= 7.0 && mentionsDesinfo;
-
+  } catch (error) {
+    const shouldProcess = deterministic.hasConcreteClaim && (deterministic.hasPublicImpact || deterministic.virality >= minimumVirality);
     return {
       should_process: shouldProcess,
-      reason: 'Evaluación local heurística restrictiva de fallback por keywords.',
-      priority: shouldProcess ? 'alta' : 'descartar',
-      public_interest_score: interest,
-      virality_score: metrics.score ? Math.min(10.0, 3.0 + metrics.score / 100) : 5.0,
-      harm_score: harm,
-      verification_value_score: valVerify,
-      commercial_noise_score: commNoise,
-      recommended_action: shouldProcess ? 'process' : 'ignore'
+      reason: `Fallback determinista: ${error.message}`,
+      priority: shouldProcess ? (deterministic.virality >= 6 ? 'alta' : 'media') : 'descartar',
+      public_interest_score: deterministic.hasPublicImpact ? 7 : 3,
+      virality_score: deterministic.virality,
+      harm_score: deterministic.hasPublicImpact ? 6 : 2,
+      verification_value_score: deterministic.hasConcreteClaim ? 7 : 2,
+      commercial_noise_score: deterministic.isPromotion ? 7 : 1,
+      relevance_rating: shouldProcess ? 65 : 25,
+      recommended_action: shouldProcess ? 'queue' : 'ignore',
+      fallback: true
     };
   }
 }

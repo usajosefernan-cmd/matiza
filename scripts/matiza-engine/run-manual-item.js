@@ -1,112 +1,55 @@
-// run-manual-item.js - MATIZA Engine Manual Item Process (Phase 2 Motor)
-import { argv } from 'node:process';
-import { runPhase } from './lib/phase-runner.js';
-import { safeStringify } from './lib/safe-json.js';
-import { validateItem } from './lib/contracts.js';
+import { getDb } from './config.js';
+import { processItem } from './run-item-pipeline.js';
+import { uid } from './lib/db-utils.js';
+import { isMainModule } from './lib/is-main.js';
 
-const args = argv.slice(2);
-const isDryRun = args.includes('--dry-run');
+const args = process.argv.slice(2);
+const dryRun = args.includes('--dry-run');
+const itemId = args.find(arg => arg.startsWith('--itemId='))?.split('=')[1]
+  || args.find(arg => arg.startsWith('--item-id='))?.split('=')[1];
+const text = args.find(arg => arg.startsWith('--text='))?.slice('--text='.length);
+const url = args.find(arg => arg.startsWith('--url='))?.slice('--url='.length) || '';
 
-const textArg = args.find(arg => arg.startsWith('--text='));
-const textVal = textArg ? textArg.split('=')[1] : args[args.indexOf('--text') + 1] || 'Afirmación de prueba del manual';
-
-console.log('╔══════════════════════════════════════════════════════╗');
-console.log('║ 👤 MATIZA: PROCESADOR MANUAL DE CLAIMS (MANUAL RUN)  ║');
-console.log(`║      MODO: ${isDryRun ? 'DRY-RUN (SIMULADO)' : 'REAL'}                       ║`);
-console.log('╚══════════════════════════════════════════════════════╝');
-
-async function runManualPipeline() {
-  const itemInput = {
-    id: `manual-item-${Date.now()}`,
-    source_type: "manual",
-    raw_text: textVal,
-    platform: "Manual UI",
-    detected_at: new Date().toISOString()
-  };
-
-  const validation = validateItem(itemInput);
-  if (!validation.ok) {
-    console.error('❌ Contrato del item inválido:', validation.errors);
-    process.exit(1);
+export async function runManualItem() {
+  let item;
+  if (itemId) {
+    const db = getDb();
+    item = db.prepare('SELECT * FROM scraped_items WHERE id = ?').get(itemId);
+    db.close();
+    if (!item) throw new Error(`No existe scraped_item ${itemId}.`);
+  } else if (text) {
+    item = {
+      id: uid('manual'),
+      platform: 'Manual',
+      url,
+      text,
+      metrics_json: JSON.stringify({}),
+      virality_score: Number.parseFloat(process.env.MANUAL_DEFAULT_VIRALITY || '5'),
+      risk_score: 5,
+      suggested_topic: 'General',
+      origin_date: new Date().toISOString(),
+      created_at: new Date().toISOString()
+    };
+    if (!dryRun) {
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO scraped_items
+        (id, platform, url, text, author_public_name, metrics_json, detected_claim, suggested_topic, virality_score, risk_score, status, origin_date, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'pendiente', ?, ?)
+      `).run(item.id, item.platform, item.url, item.text, 'Usuario', item.metrics_json, item.suggested_topic, item.virality_score, item.risk_score, item.origin_date, item.created_at);
+      db.close();
+    }
+  } else {
+    throw new Error('Usa --item-id=ID o --text="...".');
   }
 
-  const item = validation.item;
-  const inputId = item.id;
-
-  console.log(`📝 Procesando Claim: "${item.raw_text}"`);
-
-  // 1. Relevance Gate
-  const relevance = await runPhase('01-relevance-gate', inputId, async () => {
-    return {
-      ok: true,
-      result: {
-        should_process: true,
-        priority: "alta",
-        public_interest_score: 8.5,
-        recommended_action: "process"
-      }
-    };
-  });
-
-  // 2. Semantic Router
-  const router = await runPhase('02-semantic-router', inputId, async () => {
-    return {
-      ok: true,
-      result: {
-        content_type: "bulo_social",
-        claim_type: "economico",
-        needs_new_topic: true,
-        category_tags: ["autonomos", "fiscalidad"]
-      }
-    };
-  });
-
-  // 3. Cache Check (03-cache-check)
-  const cache = await runPhase('03-cache-check', inputId, async () => {
-    return {
-      ok: true,
-      result: {
-        cached: false,
-        previous_verdict: null,
-        suggested_action: "process"
-      }
-    };
-  });
-
-  // 4. Source Strategy Planner (04-source-strategy-planner)
-  const sourcePlanner = await runPhase('04-source-strategy-planner', inputId, async () => {
-    return {
-      ok: true,
-      result: {
-        source_strategy: {
-          required_source_types: ["boe", "aeat"],
-          minimum_sources: 1,
-          needs_original_source: true
-        },
-        search_queries: ["cuotas RETA 2027 BOE", "tipos IRPF Agencia Tributaria"]
-      }
-    };
-  });
-
-  const summary = {
-    ok: relevance.ok && router.ok && cache.ok && sourcePlanner.ok,
-    timestamp: new Date().toISOString(),
-    item,
-    steps: {
-      '01-relevance-gate': relevance,
-      '02-semantic-router': router,
-      '03-cache-check': cache,
-      '04-source-strategy-planner': sourcePlanner
-    }
-  };
-
-  console.log('\n========================================================');
-  console.log('🎉 Análisis Manual Completado.');
-  console.log(safeStringify(summary));
-  console.log('========================================================');
+  const result = await processItem(item, { dryRun });
+  console.log(JSON.stringify(result, null, 2));
 }
 
-runManualPipeline().catch(err => {
-  console.error('[Manual Process Error]', err);
-  process.exit(1);
-});
+if (isMainModule(import.meta.url)) {
+  runManualItem().catch(error => {
+    console.error('[Manual] Error:', error);
+    process.exit(1);
+  });
+}

@@ -420,9 +420,9 @@ async function runPipeline() {
           }
           const category = db.prepare("SELECT category FROM topics WHERE id = ?").get(topicId)?.category || 'General';
 
-          const statusVal = 'publicado';
-          const reviewVal = 0;
-          const pubAtVal = new Date().toISOString();
+          const statusVal = autopilot ? 'publicado' : 'borrador';
+          const reviewVal = autopilot ? 0 : 1;
+          const pubAtVal = autopilot ? new Date().toISOString() : null;
 
           db.prepare(`
             INSERT INTO articles (
@@ -488,7 +488,9 @@ async function runPipeline() {
             insertSource.run(`src-ai-${Date.now()}-${idx}`, articleId, src.title, src.url, src.source_type || 'oficial', src.authority_level || 'Alta', src.quote_or_summary);
           });
 
-          queueForReview(articleId, `Revisión deontológica completada: ${quality.quality_score}/10.`);
+          if (!autopilot) {
+            queueForReview(articleId, `Revisión deontológica completada: ${quality.quality_score}/10.`);
+          }
 
           setClaimCache(item.detected_claim, {
             similar_claims: [item.detected_claim],
