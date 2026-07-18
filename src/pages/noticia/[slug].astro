@@ -364,38 +364,81 @@ function renderMarkdown(md) {
       </div>
     )}
 
-    <!-- Caja de Origen de la Publicación y Captura Real -->
-    {article.origin_url && (
-      <div class="cyber-card origin-card" style="padding: 1.2rem; background: rgba(18, 22, 41, 0.35); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 12px; margin-bottom: 2rem; display: grid; grid-template-columns: 1fr auto; gap: 1.5rem; align-items: center;">
-        <div style="text-align: left;">
-          <span style="font-size: 0.65rem; font-weight: 800; text-transform: uppercase; color: var(--neon-rose); display: block; margin-bottom: 0.4rem; letter-spacing: 0.08em; font-family: monospace;">
-            🚨 ORIGEN DE LA DECLARACIÓN DETECTADA:
-          </span>
-          <p style="font-size: 0.88rem; margin: 0 0 0.5rem 0; line-height: 1.5; color: var(--text-muted); font-style: italic;">
-            "{article.claim || 'Publicación en redes sociales.'}"
-          </p>
-          {article.origin_summary && article.origin_summary !== article.claim && (
-            <div style="margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; border-left: 2px solid var(--neon-amber); background: rgba(255, 176, 32, 0.02); font-size: 0.75rem; color: #a9b2c3; line-height: 1.4;">
-              <span style="color: var(--neon-amber); font-weight: bold; font-size: 0.65rem; text-transform: uppercase; display: block; margin-bottom: 0.15rem;">Comentario / Duda reportada:</span>
-              "{article.origin_summary}"
-            </div>
-          )}
-          <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-            <span>Plataforma: <strong style="color: #fff;">{article.origin_platform || 'Instagram'}</strong></span>
-            <span style="color: rgba(255,255,255,0.15);">|</span>
+    <!-- Caja de Origen de la Publicación y Captura Real (Siempre Visible) -->
+    <div class="cyber-card origin-card" style="padding: 1.5rem; background: rgba(18, 22, 41, 0.45); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; margin-bottom: 2rem; display: grid; grid-template-columns: 1fr auto; gap: 1.5rem; align-items: center; box-shadow: 0 4px 20px rgba(0,0,0,0.15);">
+      <div style="text-align: left;">
+        <span style="font-size: 0.65rem; font-weight: 800; text-transform: uppercase; color: var(--neon-rose); display: block; margin-bottom: 0.5rem; letter-spacing: 0.08em; font-family: monospace;">
+          🚨 ORIGEN DE LA DECLARACIÓN DETECTADA:
+        </span>
+        <p style="font-size: 0.92rem; margin: 0 0 0.75rem 0; line-height: 1.5; color: var(--text-muted); font-style: italic;">
+          "{article.claim || 'Publicación en redes sociales.'}"
+        </p>
+        
+        {article.origin_summary && article.origin_summary !== article.claim && (
+          <div style="margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; border-left: 2px solid var(--neon-amber); background: rgba(255, 176, 32, 0.03); font-size: 0.75rem; color: #a9b2c3; line-height: 1.4; border-radius: 0 4px 4px 0;">
+            <span style="color: var(--neon-amber); font-weight: bold; font-size: 0.65rem; text-transform: uppercase; display: block; margin-bottom: 0.15rem;">Comentario / Duda reportada:</span>
+            "{article.origin_summary}"
+          </div>
+        )}
+
+        <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+          <span>Plataforma: <strong style="color: #fff;">{article.origin_platform || 'Redes Sociales'}</strong></span>
+          <span style="color: rgba(255,255,255,0.15);">|</span>
+          {article.origin_url ? (
             <a href={article.origin_url} target="_blank" rel="noopener noreferrer" style="color: var(--neon-blue); text-decoration: underline; font-weight: 800; display: inline-flex; align-items: center; gap: 0.25rem;" class="hover-link">
-              Ver post original en {article.origin_platform || 'Instagram'}
+              Ver post original en {article.origin_platform || 'la web'}
               <svg style="width: 12px; height: 12px;" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
               </svg>
             </a>
+          ) : (
+            <span style="color: var(--text-muted); font-weight: 500;">
+              Fuente: Reporte de usuario anónimo en Matiza
+            </span>
+          )}
+        </div>
+      </div>
+      
+      {article.multimedia_url && !article.multimedia_url.includes('unsplash.com/photo-1541872703-74c5e44368f9') ? (
+        <div class="origin-card-img" style="width: 80px; height: 80px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); overflow: hidden; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+          <img src={article.multimedia_url} alt="Captura original" style="width: 100%; height: 100%; object-fit: cover;" />
+        </div>
+      ) : (
+        <div class="origin-card-img" style="width: 80px; height: 80px; border-radius: 8px; border: 1px dashed rgba(220,39,67,0.3); background: rgba(220,39,67,0.04); display: flex; flex-direction: column; align-items: center; justify-content: center; flex-shrink: 0; gap: 0.25rem;">
+          <span style="font-size: 1.1rem;">⚠️</span>
+          <span style="font-size: 0.55rem; color: var(--neon-rose); font-weight: bold; text-transform: uppercase; letter-spacing: 0.05em; font-family: monospace;">FALSO</span>
+        </div>
+      )}
+    </div>
+
+    <!-- Recreación o Evidencia Visual del Bulo (Siempre Visible) -->
+    {!directYoutubeId && !tiktokVideoId && (!article.multimedia_url || article.multimedia_url.includes('unsplash.com/photo-1541872703-74c5e44368f9')) && (
+      <div class="cyber-card" style="margin-bottom: 2rem; border-radius: 12px; overflow: hidden; border: 1.5px dashed rgba(220, 39, 67, 0.4); background: rgba(220, 39, 67, 0.02); box-shadow: inset 0 0 20px rgba(220, 39, 67, 0.05); padding: 1.5rem; position: relative;">
+        <!-- Marca de agua de FALSO/BULO -->
+        <div style="position: absolute; right: 1.5rem; bottom: 0.5rem; font-size: 4rem; font-weight: 900; color: rgba(220, 39, 67, 0.06); font-family: var(--font-title); user-select: none; pointer-events: none; letter-spacing: 0.05em; transform: rotate(-8deg);">
+          BULO DETECTADO
+        </div>
+        
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
+          <div style="width: 32px; height: 32px; border-radius: 50%; background: #4a5568; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #fff; font-size: 0.8rem;">
+            {article.origin_platform ? article.origin_platform[0].toUpperCase() : 'R'}
+          </div>
+          <div>
+            <div style="font-size: 0.8rem; color: #fff; font-weight: 700; display: flex; align-items: center; gap: 0.25rem;">
+              {article.origin_platform || 'Usuario de Redes'}
+              <span style="font-size: 0.6rem; color: var(--text-muted); font-weight: normal;">@difusion_viral</span>
+            </div>
+            <div style="font-size: 0.65rem; color: var(--text-muted);">{article.origin_date || 'Reciente'}</div>
           </div>
         </div>
-        {article.multimedia_url && !article.multimedia_url.includes('unsplash.com/photo-1541872703-74c5e44368f9') && (
-          <div class="origin-card-img" style="width: 80px; height: 80px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); overflow: hidden; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
-            <img src={article.multimedia_url} alt="Captura original" style="max-width: 100%; max-height: 100%; object-fit: cover;" />
-          </div>
-        )}
+        
+        <p style="font-size: 1.05rem; color: #e2e8f0; font-family: var(--font-title); font-style: italic; line-height: 1.6; margin: 0 0 0.5rem 0;">
+          "{article.claim || 'Declaración viral sin base fáctica.'}"
+        </p>
+        
+        <div style="display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0.5rem; border-radius: 4px; background: rgba(220,39,67,0.1); border: 1px solid rgba(220,39,67,0.25); color: var(--neon-rose); font-size: 0.6rem; font-weight: 800; text-transform: uppercase; font-family: monospace; letter-spacing: 0.05em;">
+          ❌ Afirmación Auditada y Calificada como {article.verdict.toUpperCase()}
+        </div>
       </div>
     )}
 
