@@ -150,4 +150,10 @@ Registramos 3 crons dinámicos de ejecución periódica directamente en el plani
   6. Generación automatizada de copys para Twitter y Telegram.
   Todo finalizó limpiamente en **27.50 segundos** de forma estable y robusta.
 
-
+### 7. Consola de Monitoreo y Panel de Evidencias en Caliente (/admin)
+* **Requisito del usuario:** *"debes poner un monitorio muy desarrollado y visual en admin o auqi porue nsino no me entero que como hace la busqueda y en que falla"*
+* **Solución:**
+  1. **API Endpoint de Evidencias en Vivo:** Creamos el endpoint [evidence-status.js](file:///C:/Users/yo/Desktop/WORKSPACE/projects/matiza/src/pages/api/admin/evidence-status.js) que recupera en tiempo real los claims y sus evidencias oficiales (links contrastados, títulos y relevancia asignada por el Researcher) de la base de datos de SQLite.
+  2. **Monitor de Búsquedas en Caliente:** Inyectamos un panel interactivo premium cyberpunk en la pestaña de terminal de [admin.astro](file:///C:/Users/yo/Desktop/WORKSPACE/projects/matiza/src/pages/admin.astro) que muestra acordeones estructurados de las búsquedas web del motor. El usuario puede ver al instante el veredicto, el claim analizado, y desplegar la lista de fuentes oficiales y sus métricas de verificación.
+  3. **Script de Polling Robusto de Logs:** Programamos el script de cliente en [admin.astro](file:///C:/Users/yo/Desktop/WORKSPACE/projects/matiza/src/pages/admin.astro) que realiza fetch cada 2.5s a las APIs de logs y evidencias de forma transparente, coloreando de forma dinámica las trazas (`[ERROR]`, `⚠️ Límite`, `⚡ Fase`, `[INFO]`) y respetando los acordeones que el usuario tenga abiertos.
+  4. **Resiliencia de Cuota y Reintentos Automáticos:** Robustecimos la inferencia de [config.js](file:///C:/Users/yo/Desktop/WORKSPACE/projects/matiza/scripts/matiza-engine/config.js) empleando promesas de `curl.exe` normalizadas con barras relativas de Windows, limitando la conexión TLS con `--http1.1 --max-time 30`, y programando un mecanismo de **reintento automático con delay backoff exponencial** (de 6 a 30 segundos) ante errores de límite de tasa de API key gratuita (`HTTP 429` / `RESOURCE_EXHAUSTED`).

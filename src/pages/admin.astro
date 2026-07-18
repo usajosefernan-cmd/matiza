@@ -800,6 +800,42 @@ try {
   console.warn('[Admin] Tabla pipeline_runs no lista:', e.message);
 }
 
+// Obtener claims recientes y sus evidencias en vivo
+let claimsWithEvidences = [];
+try {
+  claimsWithEvidences = db.prepare(`
+    SELECT 
+      us.id as submission_id,
+      us.detected_claim,
+      us.virality_status,
+      us.status as submission_status,
+      us.created_at as submitted_at,
+      a.id as article_id,
+      a.title as article_title,
+      a.verdict as article_verdict
+    FROM user_submissions us
+    LEFT JOIN articles a ON a.origin_url = us.submitted_url
+    WHERE us.detected_claim IS NOT NULL AND us.detected_claim != ''
+    ORDER BY us.created_at DESC
+    LIMIT 6
+  `).all() as any[];
+
+  for (const claim of claimsWithEvidences) {
+    if (claim.article_id) {
+      claim.evidences = db.prepare(`
+        SELECT url, title, relevance_score, status 
+        FROM sources 
+        WHERE article_id = ?
+        ORDER BY relevance_score DESC
+      `).all(claim.article_id) as any[];
+    } else {
+      claim.evidences = [];
+    }
+  }
+} catch (e: any) {
+  console.warn('[Admin] Error cargando evidencias recientes:', e.message);
+}
+
 db.close();
 
 // Cargar claves de FreeLLMAPI
@@ -929,8 +965,82 @@ const getVerdictClass = (verdict) => {
       <div id="pane-terminal-logs" class="admin-tab-panel">
         <h2 class="section-title" style="margin-top: 0; margin-bottom: 0.5rem; font-size: 1.35rem; color: #fff;">📡 Consola de Monitorización del Servidor en Vivo</h2>
         <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1.5rem; margin-top: 0;">
-          Seguimiento en tiempo real de las ejecuciones del cron, del radar de scrapers y del pipeline de inteligencia artificial.
+          Seguimiento en tiempo real de las ejecuciones del cron, del radar de scrapers y de las búsquedas del pipeline de inteligencia artificial.
         </p>
+
+        <!-- PANEL DE EVIVENCIA DE BÚSQUEDA EN CALIENTE -->
+        <div class="cyber-card" style="padding: 1.5rem; border: 1px solid rgba(0, 240, 255, 0.25); border-radius: 12px; background: rgba(18, 22, 41, 0.35); margin-bottom: 2rem; box-shadow: 0 0 15px rgba(0, 240, 255, 0.05);">
+          <h3 class="card-title" style="margin-top: 0; margin-bottom: 0.5rem; font-size: 1.05rem; color: var(--neon-blue); display: flex; align-items: center; gap: 0.5rem;">
+            🔍 Monitor de Búsquedas y Evidencias en Caliente (DuckDuckGo)
+          </h3>
+          <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1.25rem; margin-top: 0;">
+            Evidencias oficiales encontradas y analizadas para los claims recientes. Haz clic en cada fila para ver las fuentes contrastadas.
+          </p>
+
+          <div id="evidence-live-container" style="display: flex; flex-direction: column; gap: 0.75rem;">
+            {claimsWithEvidences.map((c: any) => {
+              const hasEvidences = c.evidences && c.evidences.length > 0;
+              return (
+                <details class="evidence-details-accordion" style="border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; background: rgba(0,0,0,0.15); overflow: hidden;">
+                  <summary style="cursor: pointer; padding: 0.85rem 1.25rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; outline: none; list-style: none; user-select: none;">
+                    <div style="display: flex; align-items: center; gap: 0.75rem; flex: 1; min-width: 0;">
+                      <span class={`verdict-badge ${c.article_verdict ? c.article_verdict.toLowerCase().replace(' ', '-') : 'pendiente'}`} style="font-size: 0.65rem; padding: 0.15rem 0.45rem; text-transform: uppercase;">
+                        {c.article_verdict || 'INVESTIGANDO'}
+                      </span>
+                      <strong style="color: #fff; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;">
+                        {c.detected_claim}
+                      </strong>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                      {hasEvidences ? (
+                        <span style="font-size: 0.7rem; color: #00ffc4; background: rgba(0, 255, 196, 0.08); border: 1px solid rgba(0, 255, 196, 0.25); padding: 0.15rem 0.45rem; border-radius: 4px; font-weight: bold; white-space: nowrap;">
+                          {c.evidences.length} fuentes oficiales
+                        </span>
+                      ) : (
+                        <span style="font-size: 0.7rem; color: #ff3366; background: rgba(255, 51, 102, 0.08); border: 1px solid rgba(255, 51, 102, 0.25); padding: 0.15rem 0.45rem; border-radius: 4px; font-weight: bold; white-space: nowrap;">
+                          0 fuentes (Sin evidencias)
+                        </span>
+                      )}
+                      <span class="accordion-arrow" style="color: var(--text-muted); font-size: 0.8rem; transition: transform 0.2s;">▼</span>
+                    </div>
+                  </summary>
+                  
+                  <div style="padding: 1rem; background: rgba(0,0,0,0.25); border-top: 1px solid rgba(255,255,255,0.04); font-size: 0.8rem;">
+                    <div style="margin-bottom: 0.75rem; color: var(--text-muted); font-size: 0.75rem;">
+                      Envío asociado: <a href={c.submitted_url} target="_blank" style="color: var(--neon-blue); text-decoration: none; word-break: break-all;">{c.submitted_url}</a>
+                    </div>
+                    
+                    {hasEvidences ? (
+                      <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                        <div style="font-size: 0.75rem; color: #fff; font-weight: bold; margin-bottom: 0.25rem;">Fuentes oficiales contrastadas:</div>
+                        {c.evidences.map((e: any) => (
+                          <div style="display: flex; align-items: start; justify-content: space-between; gap: 1rem; background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">
+                            <div style="min-width: 0;">
+                              <a href={e.url} target="_blank" style="color: #fff; text-decoration: none; font-weight: bold; font-size: 0.75rem; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title={e.title}>
+                                🔗 {e.title || e.url}
+                              </a>
+                              <span style="font-size: 0.65rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; margin-top: 0.15rem;">{e.url}</span>
+                            </div>
+                            <span style="font-size: 0.7rem; color: var(--neon-blue); font-weight: bold; background: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0, 240, 255, 0.2); padding: 0.1rem 0.35rem; border-radius: 4px; white-space: nowrap;">
+                              Relevancia: {e.relevance_score}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style="color: var(--neon-rose); font-style: italic; font-size: 0.75rem; padding: 0.5rem 0; display: flex; align-items: center; gap: 0.35rem;">
+                        ⚠️ La búsqueda no arrojó resultados fiables o suficientes en los organismos oficiales especificados.
+                      </div>
+                    )}
+                  </div>
+                </details>
+              );
+            })}
+            {claimsWithEvidences.length === 0 && (
+              <p style="color: var(--text-muted); font-size: 0.8rem; font-style: italic; text-align: center; margin: 1rem 0;">No se han registrado claims en proceso de verificación todavía.</p>
+            )}
+          </div>
+        </div>
 
         <div class="terminal-cyberpunk" style="border: 1px solid rgba(0, 255, 196, 0.3); border-radius: 12px; overflow: hidden; background: #070913; box-shadow: 0 0 15px rgba(0, 255, 196, 0.1);">
           <div class="terminal-header" style="display: flex; align-items: center; justify-content: space-between; padding: 0.6rem 1.25rem; background: rgba(0, 255, 196, 0.03); border-bottom: 1px solid rgba(0, 255, 196, 0.2);">
@@ -2094,6 +2204,181 @@ const getVerdictClass = (verdict) => {
       const allButtons = document.querySelectorAll('button.cyber-btn');
       allButtons.forEach(btn => { if (btn) btn.disabled = false; });
     }
+  };
+
+  // Polling de logs del pipeline en caliente
+  const liveLogsBody = document.getElementById('live-terminal-body');
+  const liveLogsStatus = document.getElementById('live-logs-status');
+  const evidenceLiveContainer = document.getElementById('evidence-live-container');
+  let logInterval = null;
+  let evidenceInterval = null;
+  let isUserScrollingLogs = false;
+
+  if (liveLogsBody) {
+    liveLogsBody.addEventListener('scroll', () => {
+      // Si el usuario sube el scroll, desactivamos el autoscroll para dejarle leer
+      const tolerance = 15;
+      const isAtBottom = liveLogsBody.scrollHeight - liveLogsBody.scrollTop - liveLogsBody.clientHeight <= tolerance;
+      isUserScrollingLogs = !isAtBottom;
+    });
+  }
+
+  async function fetchLiveLogs() {
+    const cleanBase = window.location.pathname.includes('/pro/matiza') ? '/pro/matiza' : '';
+    try {
+      let url = `${cleanBase}/api/admin/pipeline-logs/`;
+      let res = await fetch(url);
+      if (!res.ok && !cleanBase) {
+        res = await fetch('/pro/matiza/api/admin/pipeline-logs/');
+      }
+      if (!res.ok) throw new Error('API respondió con status ' + res.status);
+      const data = await res.json();
+      
+      if (data.logs && liveLogsBody) {
+        liveLogsBody.innerHTML = '';
+        data.logs.forEach(line => {
+          const div = document.createElement('div');
+          div.style.wordBreak = 'break-all';
+          
+          let parsedLine = line;
+          
+          // Formateo Cyberpunk/Premium coloreado por regex de forma rápida y limpia
+          if (line.includes('[ERROR]') || line.includes('❌') || line.includes('Error:')) {
+            div.style.color = '#ff3366'; // neon rose
+          } else if (line.includes('[WARN]') || line.includes('⚠️') || line.includes('reintentando') || line.includes('Limit') || line.includes('quota')) {
+            div.style.color = '#ffb020'; // neon amber
+          } else if (line.includes('⚡') || line.includes('Fase')) {
+            div.style.color = '#00f0ff'; // neon blue
+          } else if (line.includes('[INFO]') || line.includes('✅') || line.includes('SUCCESS') || line.includes('--- PIPELINE')) {
+            div.style.color = '#00ffc4'; // neon green
+          } else {
+            div.style.color = '#a9b2c3';
+          }
+          
+          div.innerText = parsedLine;
+          liveLogsBody.appendChild(div);
+        });
+
+        // Autoscroll hacia abajo si el usuario no está scrolleando manualmente
+        if (!isUserScrollingLogs) {
+          liveLogsBody.scrollTop = liveLogsBody.scrollHeight;
+        }
+      }
+      if (liveLogsStatus) {
+        liveLogsStatus.innerText = 'CONECTADO (POLLING)';
+        liveLogsStatus.style.color = '#00ffc4';
+      }
+    } catch (e) {
+      console.error('Error cargando logs en vivo:', e.message);
+      if (liveLogsStatus) {
+        liveLogsStatus.innerText = 'RECONECTANDO...';
+        liveLogsStatus.style.color = '#ff3366';
+      }
+    }
+  }
+
+  async function fetchEvidenceStatus() {
+    const cleanBase = window.location.pathname.includes('/pro/matiza') ? '/pro/matiza' : '';
+    try {
+      let url = `${cleanBase}/api/admin/evidence-status/`;
+      let res = await fetch(url);
+      if (!res.ok && !cleanBase) {
+        res = await fetch('/pro/matiza/api/admin/evidence-status/');
+      }
+      if (!res.ok) throw new Error('API respondió con status ' + res.status);
+      const data = await res.json();
+      
+      if (data.claims && evidenceLiveContainer) {
+        // Generar HTML dinámico de evidencias con estilos premium
+        let html = '';
+        data.claims.forEach(c => {
+          const hasEvidences = c.evidences && c.evidences.length > 0;
+          const verdict = c.article_verdict || 'INVESTIGANDO';
+          const verdictClass = verdict.toLowerCase().replace(' ', '-');
+          
+          let evidencesHtml = '';
+          if (hasEvidences) {
+            evidencesHtml = `<div style="display: flex; flex-direction: column; gap: 0.5rem;">
+              <div style="font-size: 0.75rem; color: #fff; font-weight: bold; margin-bottom: 0.25rem;">Fuentes oficiales contrastadas:</div>`;
+            c.evidences.forEach(e => {
+              evidencesHtml += `
+                <div style="display: flex; align-items: start; justify-content: space-between; gap: 1rem; background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">
+                  <div style="min-width: 0;">
+                    <a href="${e.url}" target="_blank" style="color: #fff; text-decoration: none; font-weight: bold; font-size: 0.75rem; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${e.title || e.url}">
+                      🔗 ${e.title || e.url}
+                    </a>
+                    <span style="font-size: 0.65rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; margin-top: 0.15rem;">${e.url}</span>
+                  </div>
+                  <span style="font-size: 0.7rem; color: var(--neon-blue); font-weight: bold; background: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0, 240, 255, 0.2); padding: 0.1rem 0.35rem; border-radius: 4px; white-space: nowrap;">
+                    Relevancia: ${e.relevance_score}
+                  </span>
+                </div>`;
+            });
+            evidencesHtml += `</div>`;
+          } else {
+            evidencesHtml = `
+              <div style="color: var(--neon-rose); font-style: italic; font-size: 0.75rem; padding: 0.5rem 0; display: flex; align-items: center; gap: 0.35rem;">
+                ⚠️ La búsqueda no arrojó resultados fiables o suficientes en los organismos oficiales especificados.
+              </div>`;
+          }
+
+          html += `
+            <details class="evidence-details-accordion" style="border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; background: rgba(0,0,0,0.15); overflow: hidden; margin-bottom: 0.5rem;">
+              <summary style="cursor: pointer; padding: 0.85rem 1.25rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; outline: none; list-style: none; user-select: none;">
+                <div style="display: flex; align-items: center; gap: 0.75rem; flex: 1; min-width: 0;">
+                  <span class="verdict-badge ${verdictClass}" style="font-size: 0.65rem; padding: 0.15rem 0.45rem; text-transform: uppercase;">
+                    ${verdict}
+                  </span>
+                  <strong style="color: #fff; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;">
+                    ${c.detected_claim}
+                  </strong>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                  ${hasEvidences ? `
+                    <span style="font-size: 0.7rem; color: #00ffc4; background: rgba(0, 255, 196, 0.08); border: 1px solid rgba(0, 255, 196, 0.25); padding: 0.15rem 0.45rem; border-radius: 4px; font-weight: bold; white-space: nowrap;">
+                      ${c.evidences.length} fuentes oficiales
+                    </span>` : `
+                    <span style="font-size: 0.7rem; color: #ff3366; background: rgba(255, 51, 102, 0.08); border: 1px solid rgba(255, 51, 102, 0.25); padding: 0.15rem 0.45rem; border-radius: 4px; font-weight: bold; white-space: nowrap;">
+                      0 fuentes (Sin evidencias)
+                    </span>`}
+                  <span class="accordion-arrow" style="color: var(--text-muted); font-size: 0.8rem; transition: transform 0.2s;">▼</span>
+                </div>
+              </summary>
+              <div style="padding: 1rem; background: rgba(0,0,0,0.25); border-top: 1px solid rgba(255,255,255,0.04); font-size: 0.8rem;">
+                <div style="margin-bottom: 0.75rem; color: var(--text-muted); font-size: 0.75rem;">
+                  Envío asociado: <a href="${c.submitted_url}" target="_blank" style="color: var(--neon-blue); text-decoration: none; word-break: break-all;">${c.submitted_url}</a>
+                </div>
+                ${evidencesHtml}
+              </div>
+            </details>`;
+        });
+        
+        // Conservar acordeones abiertos
+        const openAccordionsIndices = Array.from(evidenceLiveContainer.querySelectorAll('details')).map((d, idx) => d.open ? idx : null).filter(x => x !== null);
+        evidenceLiveContainer.innerHTML = html;
+        const newAccordions = evidenceLiveContainer.querySelectorAll('details');
+        openAccordionsIndices.forEach(idx => {
+          if (newAccordions[idx]) newAccordions[idx].open = true;
+        });
+      }
+    } catch(e) {
+      console.error('Error cargando estado de evidencias:', e.message);
+    }
+  }
+
+  // Activar polling al cargar
+  function initLivePolling() {
+    clearInterval(logInterval);
+    clearInterval(evidenceInterval);
+    
+    fetchLiveLogs();
+    fetchEvidenceStatus();
+    
+    logInterval = setInterval(fetchLiveLogs, 2500);
+    evidenceInterval = setInterval(fetchEvidenceStatus, 3500);
+  }
+
+  initLivePolling();
   };
 </script>
 

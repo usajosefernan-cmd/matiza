@@ -10,6 +10,17 @@ export async function filterNoise(itemText, platform, contextOrSignal = {}, mayb
   const virality = Number(context.virality_score || context.virality || 0);
   const harm = Number(context.harm_score || context.harm || 0);
 
+  const isHighlyViral = virality >= 6.0 || platform === 'Instagram' || platform === 'TikTok';
+  if (isHighlyViral) {
+    return {
+      is_noise: false,
+      noise_reason: `Contenido altamente viral o de interes en plataforma de video (${platform}). Se evita el descarte de ruido.`,
+      keep_monitoring: true,
+      requires_processing: true,
+      deterministic: true
+    };
+  }
+
   if (hasCommercialDisclosure && hasConcretePromise && (virality >= 4 || harm >= 5)) {
     return {
       is_noise: false,

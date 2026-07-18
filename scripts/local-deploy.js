@@ -84,7 +84,7 @@ async function runLocalDeploy() {
         `);
         insertStmt.run(
           item.id, platform, item.url, databaseText,
-          JSON.stringify({ declared_views: views, imageUrl: originalImageUrl }),
+          JSON.stringify({ declared_views: views, imageUrl: originalImageUrl, fromRadar: true }),
           title || 'Reporte de la cola pública', iv, ird
         );
 

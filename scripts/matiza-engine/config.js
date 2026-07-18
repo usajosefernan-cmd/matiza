@@ -2,7 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+import { execSync, exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { AsyncLocalStorage } from 'node:async_hooks';
+const execPromise = promisify(exec);
 
 // Cargar variables de entorno del archivo .env de forma manual y robusta si existe
 try {
@@ -173,6 +176,47 @@ export function extractJson(text) {
   return null;
 }
 
+export function sanitizeJsonString(str) {
+  if (!str) return "";
+  let result = "";
+  let inString = false;
+  let escapeNext = false;
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+    if (escapeNext) {
+      result += char;
+      escapeNext = false;
+      continue;
+    }
+    if (char === "\\") {
+      result += char;
+      escapeNext = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      result += char;
+      continue;
+    }
+    if (inString) {
+      if (char === "\n") {
+        result += "\\n";
+      } else if (char === "\r") {
+        result += "\\r";
+      } else if (char === "\t") {
+        result += "\\t";
+      } else if (char.charCodeAt(0) < 32) {
+        result += "\\u" + ("0000" + char.charCodeAt(0).toString(16)).slice(-4);
+      } else {
+        result += char;
+      }
+    } else {
+      result += char;
+    }
+  }
+  return result;
+}
+
 // Helper de fetch con reintentos para errores transitorios
 async function fetchWithRetry(url, options, maxRetries = 3, initialDelay = 500) {
   let delay = initialDelay;
@@ -243,170 +287,195 @@ export async function callGemini(promptText, phaseId = null, options = {}) {
     throw abortErr;
   }
 
-  // Esperar turno en la cola de inferencia local para evitar rate limits HTTP 429
+  // Esperar turno en la cola de inferencia local para evitar rate limits
   await new Promise(resolve => {
     inferenceQueuePromise = inferenceQueuePromise.then(async () => {
       resolve();
-      // Delay de separación de 1.5 segundos para espaciar ráfagas concurrentes
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 5000));
     }).catch(() => {
       resolve();
     });
   });
 
-              
-
   const config = getPipelineConfig();
-  
-  let provider = 'freellmapi';
-  let model = 'auto';
   let temperature = 0.2;
   
-  if (config) {
-    if (phaseId && config.phases && config.phases[phaseId]) {
-      const phaseConf = config.phases[phaseId];
-      provider = phaseConf.provider || config.global.default_provider || 'freellmapi';
-      model = phaseConf.model || 'auto';
-      temperature = phaseConf.temperature !== undefined ? phaseConf.temperature : temperature;
-    } else {
-      provider = config.global.default_provider || 'freellmapi';
-      model = 'auto';
-    }
+  if (config && phaseId && config.phases && config.phases[phaseId]) {
+    const phaseConf = config.phases[phaseId];
+    temperature = phaseConf.temperature !== undefined ? phaseConf.temperature : temperature;
   }
 
-  // Traducción de alias a modelos físicos para los proveedores de fallback
-  const FALLBACK_MODELS = {
-    gemini: {
-      'auto:fast': 'gemini-2.5-flash',
-      'auto:balanced': 'gemini-2.5-flash',
-      'auto:smart': 'gemini-2.5-pro',
-      'auto:reliable': 'gemini-2.5-pro',
-      'auto': 'gemini-2.5-flash'
-    },
-    openrouter: {
-      'auto:fast': 'meta-llama/llama-3.1-8b-instruct:free',
-      'auto:balanced': 'meta-llama/llama-3.1-8b-instruct:free',
-      'auto:smart': 'qwen/qwen-2.5-72b-instruct:free',
-      'auto:reliable': 'qwen/qwen-2.5-72b-instruct:free',
-      'auto': 'google/gemma-2-9b-it:free'
-    },
-    groq: {
-      'auto:fast': 'llama-3.1-8b-instant',
-      'auto:balanced': 'llama-3.3-70b-specdec',
-      'auto:smart': 'llama-3.3-70b-specdec',
-      'auto:reliable': 'llama-3.3-70b-specdec',
-      'auto': 'llama-3.3-70b-specdec'
-    }
-  };
+  console.log(`[Antigravity IA Local] ⚡ [Fase ${phaseId || 'Global'}] Intentando API local de Antigravity (puerto 3010)...`);
 
-  const getFallbackModel = (prov, alias) => {
-    if (alias.startsWith('auto') && FALLBACK_MODELS[prov] && FALLBACK_MODELS[prov][alias]) {
-      return FALLBACK_MODELS[prov][alias];
+  try {
+    if (process.env.USE_OFFLINE_DISK === 'true') {
+      throw new Error('Forzando uso directo de disco offline por configuracion');
     }
-    const cleaned = alias.includes('/') ? alias.split('/').pop() : alias;
+    const payload = {
+      model: 'google/gemma-4-26b-a4b-it:free',
+      max_tokens: 4096,
+      messages: [{ role: 'user', content: promptText }]
+    };
+
+    const fetchController = new AbortController();
+    const timeoutId = setTimeout(() => fetchController.abort(), 90000); // 90 segundos de timeout
     
-    // Asegurar compatibilidad física del modelo con el proveedor de fallback
-    if (prov === 'gemini') {
-      if (cleaned.includes('pro') || cleaned.includes('high') || cleaned.includes('smart') || cleaned.includes('reliable')) {
-        return 'gemini-2.5-pro';
+    let activeSignal = fetchController.signal;
+    if (externalSignal) {
+      // Si el usuario cancela externamente, abortamos la peticion
+      externalSignal.addEventListener('abort', () => fetchController.abort());
+      if (externalSignal.aborted) {
+        fetchController.abort();
       }
-      return 'gemini-2.5-flash';
     }
-    if (prov === 'groq' && !cleaned.startsWith('llama') && !cleaned.startsWith('mixtral') && !cleaned.startsWith('gemma')) {
-      return 'llama-3.3-70b-specdec';
-    }
-    if (prov === 'openrouter' && !cleaned.includes('/')) {
-      if (cleaned.startsWith('gemini') || cleaned.startsWith('gemma')) {
-        return `google/${cleaned}`;
-      }
-      if (cleaned.startsWith('llama')) {
-        return `meta-llama/${cleaned}-instruct`;
-      }
-      if (cleaned.startsWith('mistral') || cleaned.startsWith('mixtral') || cleaned.startsWith('codestral')) {
-        return `mistralai/${cleaned}`;
-      }
-      if (cleaned.startsWith('qwen')) {
-        return `qwen/${cleaned}`;
-      }
-      if (cleaned.startsWith('deepseek')) {
-        return `deepseek/${cleaned}`;
-      }
-      return `google/${cleaned}`;
-    }
-    return cleaned;
-  };
 
+    let response = null;
+    let attempts = 0;
+    const maxAttempts = 12;
+    let delayMs = 5000;
 
-  console.log(`[Antigravity IA Local] ⚡ [Fase ${phaseId || 'Global'}] Delegando inferencia a la IA de Antigravity (Chat)...`);
-  
-  const scratchDir = path.resolve('scratch');
-  if (!fs.existsSync(scratchDir)) {
-    fs.mkdirSync(scratchDir, { recursive: true });
-  }
-  
-  const reqId = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-  const requestPath = path.join(scratchDir, `ia_request_${reqId}.json`);
-  const responsePath = path.join(scratchDir, `ia_response_${reqId}.json`);
-  
-  const requestData = {
-    id: reqId,
-    phaseId,
-    prompt: promptText,
-    timestamp: new Date().toISOString()
-  };
-  
-  fs.writeFileSync(requestPath, JSON.stringify(requestData, null, 2), 'utf-8');
-  console.log(`[Antigravity IA Local] Petición ${reqId} guardada en scratch/. Esperando que el agente Antigravity responda en el chat...`);
-  
-  const timeoutMs = 120000;
-  const pollInterval = 1000;
-  const startTime = Date.now();
-  
-  while (true) {
-    if (externalSignal && externalSignal.aborted) {
-      try { if (fs.existsSync(requestPath)) fs.unlinkSync(requestPath); } catch (e) {}
-      const abortErr = new Error('Request aborted.');
-      abortErr.name = 'AbortError';
-      throw abortErr;
-    }
-    
-    if (fs.existsSync(responsePath)) {
+    while (attempts < maxAttempts) {
       try {
-        const responseContent = fs.readFileSync(responsePath, 'utf-8');
-        const responseData = JSON.parse(responseContent);
-        
-        // Verificar que corresponde a nuestra petición activa
-        if (responseData.id === reqId || responseData.request_id === reqId || !responseData.id) {
-          console.log(`[Antigravity IA Local] ✨ [Fase ${phaseId || 'Global'}] Inferencia resuelta localmente por la IA de Antigravity (Chat).`);
-          
-          global.lastInferenceTelemetry = {
-            provider: 'antigravity',
-            model: 'Antigravity Chat Agent',
-            durationMs: Date.now() - tStartCall
-          };
-          
-          // Borrar archivos
-          try { fs.unlinkSync(requestPath); } catch (e) {}
-          try { fs.unlinkSync(responsePath); } catch (e) {}
-          
-          const rawText = responseData.response || responseData.text || responseContent;
-          const cleanText = rawText.trim();
-          const extracted = extractJson(cleanText);
-          if (extracted) return JSON.parse(extracted);
-          const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
-          if (jsonMatch) return JSON.parse(jsonMatch[0]);
-          return responseData; // Retornar el objeto si ya es JSON parseado
+        const responseAttempt = await fetch('http://127.0.0.1:3010/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload),
+          signal: activeSignal
+        });
+
+        if (responseAttempt.status === 429) {
+          attempts++;
+          console.log(`[Antigravity IA Local] ⚠️ Rate limit (429) en intento ${attempts}/${maxAttempts}. Esperando ${delayMs}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          delayMs *= 1.5; // Backoff exponencial
+          continue;
         }
+
+        response = responseAttempt;
+        break;
       } catch (err) {
-        // En proceso de escritura, reintentar en el siguiente tick
+        // Si hay un error de red y no hemos superado los intentos, reintentar
+        attempts++;
+        if (attempts >= maxAttempts) {
+          throw err;
+        }
+        console.log(`[Antigravity IA Local] ⚠️ Error de red en intento ${attempts}/${maxAttempts}: ${err.message}. Reintentando en ${delayMs}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        delayMs *= 1.5;
       }
     }
-    
-    if (Date.now() - startTime > timeoutMs) {
-      try { if (fs.existsSync(requestPath)) fs.unlinkSync(requestPath); } catch (e) {}
-      throw new Error(`[Antigravity IA Local] Timeout esperando la respuesta del agente Antigravity en el chat.`);
+
+    clearTimeout(timeoutId);
+
+    if (!response) {
+      throw new Error(`Superado el maximo de reintentos por Rate Limit (429)`);
     }
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const rawText = data.content?.[0]?.text || '';
+    const cleanText = rawText.trim();
+
+    global.lastInferenceTelemetry = {
+      provider: 'antigravity-api',
+      model: 'gemma-4-26b',
+      durationMs: Date.now() - tStartCall
+    };
+
+    const extracted = extractJson(cleanText);
+    if (extracted) {
+      try {
+        return JSON.parse(sanitizeJsonString(extracted));
+      } catch (e) {
+        console.warn(`[Antigravity IA Local] Fallo al parsear extracted JSON saneado, intentando JSON match...`);
+      }
+    }
+    const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        return JSON.parse(sanitizeJsonString(jsonMatch[0]));
+      } catch (e) {
+        console.warn(`[Antigravity IA Local] Fallo al parsear jsonMatch saneado:`, e.message);
+      }
+    }
+    return cleanText;
+
+  } catch (apiErr) {
+    console.log(`[Antigravity IA Local] ⚠️ API local falló (${apiErr.message}). Usando fallback offline por disco...`);
+
+    const scratchDir = path.resolve('scratch');
+    if (!fs.existsSync(scratchDir)) {
+      fs.mkdirSync(scratchDir, { recursive: true });
+    }
+
+    // Generar archivos de peticion y respuesta offline
+    const reqFile = path.join(scratchDir, `ia_request_${Date.now()}_${Math.floor(Math.random() * 1000)}.json`);
+    const resFile = reqFile.replace('ia_request_', 'ia_response_');
     
-    await new Promise(resolve => setTimeout(resolve, pollInterval));
+    try {
+      const requestData = {
+        prompt: promptText,
+        temperature,
+        phase: phaseId,
+        created_at: new Date().toISOString()
+      };
+      
+      fs.writeFileSync(reqFile, JSON.stringify(requestData, null, 2), 'utf-8');
+      console.log(`[Antigravity IA Local] 📂 Archivo escrito: ${path.basename(reqFile)}. Esperando respuesta del chat...`);
+      
+      // Polling síncrono esperando a que el agente del chat/usuario escriba la respuesta en disco
+      let responseData = null;
+      const timeoutMs = 600000;
+      const startPoll = Date.now();
+      
+      while (Date.now() - startPoll < timeoutMs) {
+        if (fs.existsSync(resFile)) {
+          const content = fs.readFileSync(resFile, 'utf-8');
+          if (content.trim()) {
+            try {
+              responseData = JSON.parse(content);
+              break;
+            } catch (e) {
+              // Esperar a que se termine de escribir
+            }
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      
+      // Limpieza de archivos procesados
+      try { if (fs.existsSync(reqFile)) fs.unlinkSync(reqFile); } catch (e) {}
+      try { if (fs.existsSync(resFile)) fs.unlinkSync(resFile); } catch (e) {}
+      
+      if (!responseData) {
+        throw new Error(`Timeout esperando respuesta offline de Antigravity (${path.basename(resFile)})`);
+      }
+      
+      const rawText = responseData.response || responseData.choices?.[0]?.message?.content || '';
+      const cleanText = rawText.trim();
+      
+      global.lastInferenceTelemetry = {
+        provider: 'antigravity-offline',
+        model: 'chat-offline',
+        durationMs: Date.now() - tStartCall
+      };
+
+      const extracted = extractJson(cleanText);
+      if (extracted) return JSON.parse(extracted);
+      const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) return JSON.parse(jsonMatch[0]);
+      return cleanText;
+
+    } catch (fallbackErr) {
+      try { if (fs.existsSync(reqFile)) fs.unlinkSync(reqFile); } catch (e) {}
+      try { if (fs.existsSync(resFile)) fs.unlinkSync(resFile); } catch (e) {}
+      console.error(`[Antigravity IA Local] ❌ Error en el sistema de disco offline: ${fallbackErr.message}`);
+      throw fallbackErr;
+    }
   }
 }

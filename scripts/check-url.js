@@ -21,6 +21,22 @@ const BROWSER_HEADERS = {
   'Accept-Encoding': 'identity'
 };
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    throw error;
+  }
+}
+
 // ===== DETECCIÓN DE PLATAFORMA =====
 
 function detectPlatform(url) {
@@ -241,7 +257,7 @@ async function analyzeInstagram(url) {
   const result = { platform: 'Instagram', isAccessible: false, rawUrl: url };
   try {
     const oembedUrl = `https://open.instagram.com/oembed/?url=${encodeURIComponent(url)}`;
-    const resp = await fetch(oembedUrl, { headers: BROWSER_HEADERS });
+    const resp = await fetchWithTimeout(oembedUrl, { headers: BROWSER_HEADERS });
     if (resp.ok) {
       const data = await resp.json();
       result.isAccessible = true;
@@ -420,7 +436,7 @@ async function analyzeGenericUrl(url, platform) {
   const result = { platform, isAccessible: false, rawUrl: url };
 
   try {
-    const resp = await fetch(url, { 
+    const resp = await fetchWithTimeout(url, { 
       headers: BROWSER_HEADERS,
       redirect: 'follow'
     });

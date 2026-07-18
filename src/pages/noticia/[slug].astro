@@ -209,6 +209,7 @@ const base = import.meta.env.BASE_URL;
 const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base;
 
 let realMetrics = { likes: null, reposts: null, comments: null, views: null };
+let isRadar = article.origin_platform === 'Radar';
 if (scrapedItem && scrapedItem.metrics_json) {
   try {
     const parsed = JSON.parse(scrapedItem.metrics_json);
@@ -216,6 +217,9 @@ if (scrapedItem && scrapedItem.metrics_json) {
     realMetrics.reposts = parsed.reposts || parsed.retweetCount || parsed.shareCount || parsed.reposts_count || null;
     realMetrics.comments = parsed.comments || parsed.commentCount || parsed.comments_count || null;
     realMetrics.views = parsed.views || parsed.viewCount || parsed.views_count || null;
+    if (parsed.fromRadar) {
+      isRadar = true;
+    }
   } catch (e) {}
 }
 
@@ -361,6 +365,31 @@ function renderMarkdown(md) {
         </div>
       )}
     </header>
+
+    <!-- Insignia del Radar (Detección y Publicación Automática) -->
+    {isRadar && (
+      <div class="radar-badge-container" style="margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: center; gap: 0.75rem; background: radial-gradient(circle, rgba(0, 240, 255, 0.12) 0%, rgba(7, 9, 19, 0.95) 100%); border: 1px solid var(--neon-blue); box-shadow: 0 0 15px rgba(0, 240, 255, 0.2); border-radius: 12px; padding: 1rem 1.25rem;">
+        <div class="radar-ping-icon" style="position: relative; width: 32px; height: 32px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;">
+          <span style="position: absolute; width: 100%; height: 100%; border-radius: 50%; border: 1.5px solid var(--neon-blue); opacity: 0.15; animation: radar-wave 2.5s infinite linear;"></span>
+          <span style="position: absolute; width: 70%; height: 70%; border-radius: 50%; border: 1.5px solid var(--neon-blue); opacity: 0.35; animation: radar-wave 2.5s infinite linear; animation-delay: 0.8s;"></span>
+          <svg style="width: 16px; height: 16px; color: var(--neon-blue); z-index: 2;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle>
+            <circle cx="12" cy="12" r="6" stroke-opacity="0.4"></circle>
+            <circle cx="12" cy="12" r="2" stroke-opacity="0.8"></circle>
+            <line x1="12" y1="12" x2="12" y2="2" style="transform-origin: 12px 12px; animation: radar-sweep 2.5s linear infinite;"></line>
+          </svg>
+        </div>
+        <div style="text-align: left;">
+          <h4 style="margin: 0; font-size: 0.78rem; font-weight: 800; color: #fff; font-family: var(--font-title); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.35rem;">
+            <span>Capturado por el Radar</span>
+            <span style="background: rgba(0, 240, 255, 0.15); color: var(--neon-blue); font-size: 0.55rem; font-family: monospace; padding: 0.1rem 0.35rem; border-radius: 3px; border: 1px solid rgba(0, 240, 255, 0.25);">AUTO-PUBLICADO</span>
+          </h4>
+          <p style="margin: 0.15rem 0 0 0; font-size: 0.75rem; color: var(--text-muted); line-height: 1.35;">
+            Este enlace fue reportado por un usuario. El motor de IA local de Matiza verificó su viralidad real y validez fáctica, publicándolo automáticamente de forma inmediata.
+          </p>
+        </div>
+      </div>
+    )}
 
     <!-- Caja de Origen de la Publicación y Captura Real -->
     {article.origin_url && (
@@ -701,5 +730,15 @@ function renderMarkdown(md) {
     .origin-card-img {
       margin: 0 auto;
     }
+  }
+
+  /* Animaciones del Radar Badge */
+  @keyframes radar-wave {
+    0% { transform: scale(0.5); opacity: 0.8; }
+    100% { transform: scale(1.5); opacity: 0; }
+  }
+  @keyframes radar-sweep {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
   }
 </style>

@@ -1,12 +1,10 @@
 ---
-export const prerender = true;
+export const prerender = false;
 import Layout from '../layouts/Layout.astro';
 import { getDatabase } from '../lib/db.js';
-import path from 'node:path';
 
 // Cargar envíos recientes del radar para mostrarlos de forma anónima
 const db = getDatabase();
-
 
 const submissions = db.prepare(`
   SELECT * FROM user_submissions 
@@ -38,50 +36,81 @@ function getStatusLabel(status: string) {
   if (s === 'descartado_por_baja_relevancia') return 'Descartado';
   return status;
 }
+
+function formatDate(dateStr: string) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
 ---
 
-<Layout title="Radar Ciudadano de Desinformación - MATIZA">
-  <div class="container" style="padding-top: 2rem; padding-bottom: 4rem; max-width: 680px;">
+<Layout title="Buzón del Radar — Hermes Engine" description="Audita links virales sospechosos en caliente con bases de datos oficiales.">
+  <div id="radar-app" class="container" data-base={cleanBase} style="max-width: 600px; padding: 2.5rem 1rem;">
     
     <!-- Volver -->
     <a href={cleanBase || "/"} style="text-decoration: none; color: var(--neon-blue); font-size: 0.8rem; font-weight: 700; display: inline-flex; align-items: center; gap: 0.25rem; margin-bottom: 1.5rem;">
       &larr; Volver al Portal
     </a>
 
-    <!-- Encabezado -->
-    <header style="margin-bottom: 2.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 1.5rem;">
-      <span class="pulse-dot" style="font-size: 0.65rem; font-weight: 800; text-transform: uppercase; color: var(--neon-rose); letter-spacing: 0.15em; display: inline-flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
-        <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--neon-rose); display: inline-block;"></span>
+    <!--  CABECERA CON RADAR GRÁFICO CHULO -->
+    <section style="text-align: center; margin-bottom: 2rem;">
+      <div class="radar-container">
+        <div class="radar-sweep"></div>
+        <div class="radar-grid"></div>
+        <div class="radar-center"></div>
+        <div class="radar-blip" id="radar-active-blip"></div>
+      </div>
+
+      <span class="pulse-dot-wrap" style="font-size: 0.65rem; font-weight: 800; text-transform: uppercase; color: var(--neon-rose); letter-spacing: 0.15em; display: inline-flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+        <span class="pulse-dot" style="width: 8px; height: 8px; border-radius: 50%; display: inline-block;"></span>
         Radar de Intercepción Colaborativa
       </span>
-      <h1 style="font-size: 1.8rem; font-weight: 900; letter-spacing: -0.03em; margin: 0; line-height: 1.2; color: #ffffff;">
-        Envía un claim sospechoso
+      <h1 style="font-size: 2.1rem; font-weight: 900; letter-spacing: -0.04em; margin: 0 0 0.3rem 0; line-height: 1.1; font-family: var(--font-title); color: #fff;">
+        Buzón del <span style="color: var(--neon-blue); text-shadow: 0 0 10px rgba(0, 240, 255, 0.3);">Radar</span>
       </h1>
-      <p style="color: var(--text-muted); font-size: 0.9rem; line-height: 1.5; margin-top: 0.5rem;">
-        ¿Has visto un post, un vídeo en YouTube o TikTok con datos alarmantes o enlaces promocionales encubiertos? Pégalo aquí. Nuestros motores autónomos evaluarán su relevancia, viralidad y daño potencial antes de iniciar la verificación.
+      <p style="color: var(--text-muted); font-size: 0.85rem; line-height: 1.45; max-width: 440px; margin: 0 auto;">
+        Inserta un enlace sospechoso. Nuestro radar auditará su viralidad real y el impacto social del tema contrastándolo con fuentes oficiales en tiempo real.
       </p>
-    </header>
+    </section>
 
-    <!-- Formulario de envío -->
-    <section class="cyber-card" style="padding: 1.75rem; background: linear-gradient(180deg, rgba(18, 22, 41, 0.8) 0%, rgba(7, 9, 19, 0.95) 100%); margin-bottom: 3rem;">
-      <form id="radar-form">
-        <div style="margin-bottom: 1.25rem;">
-          <label for="url" style="display: block; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; color: var(--neon-blue); letter-spacing: 0.05em; margin-bottom: 0.5rem;">Enlace original (Opcional)</label>
-          <input type="url" id="url" name="url" placeholder="https://tiktok.com/@usuario/video/12345..." style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.75rem; border-radius: 8px; font-size: 0.85rem; outline: none; transition: border-color 0.2s;" />
+    <!-- Caja del Formulario Cyberpunk con barra de escaneo -->
+    <section class="cyber-card" style="padding: 1.85rem; background: linear-gradient(180deg, rgba(7, 9, 19, 0.95) 0%, rgba(18, 22, 41, 0.85) 100%); border-color: var(--neon-blue); box-shadow: 0 10px 30px rgba(0, 240, 255, 0.03); position: relative; overflow: hidden; margin-bottom: 3rem;">
+      
+      <!-- Barra de Escaneo que se desliza cuando se procesa -->
+      <div id="scanning-laser" class="scanning-bar"></div>
+
+      <form id="public-report-form" style="display: flex; flex-direction: column; gap: 1.25rem;">
+        
+        <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+          <label style="font-size: 0.65rem; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.08em; text-align: left;">Enlace de la publicación sospechosa:</label>
+          <input type="url" id="report-url" name="url" placeholder="https://tiktok.com/@user/video/... o https://youtube.com/watch?v=..." required 
+            style="width: 100%; padding: 0.75rem; background: rgba(0,0,0,0.6); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-main); font-size: 0.85rem; outline: none; transition: border-color 0.2s; box-sizing: border-box;" />
         </div>
 
-        <div style="margin-bottom: 1.5rem;">
-          <label for="text" style="display: block; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; color: var(--neon-blue); letter-spacing: 0.05em; margin-bottom: 0.5rem;">Afirmación a verificar o descripción</label>
-          <textarea id="text" name="text" rows="4" placeholder="Ej: Aseguran en un vídeo que van a dar 4.200€ al mes de ayuda a todos los inmigrantes que lleguen a Canarias..." style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: #fff; padding: 0.75rem; border-radius: 8px; font-size: 0.85rem; outline: none; transition: border-color 0.2s; resize: vertical;" required></textarea>
+        <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+          <label style="font-size: 0.65rem; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.08em; text-align: left;">¿Qué se afirma en el bulo? (Opcional):</label>
+          <textarea id="report-text" name="text" placeholder="Ej: Afirman que los autónomos tendrán una cuota del 50%..." rows="2"
+            style="width: 100%; padding: 0.75rem; background: rgba(0,0,0,0.6); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-main); font-size: 0.85rem; outline: none; transition: border-color 0.2s; resize: none; box-sizing: border-box;"></textarea>
         </div>
 
-        <button type="submit" class="cyber-btn accent" style="width: 100%; padding: 0.75rem; border-radius: 8px; font-size: 0.85rem; font-weight: 800; cursor: pointer; text-transform: uppercase; letter-spacing: 0.05em;">
-          Enviar al Radar de Triage &rarr;
+        <button type="submit" id="submit-btn" class="cyber-btn accent" style="width: 100%; padding: 0.85rem; border-radius: 8px; font-weight: 800; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.08em; cursor: pointer; transition: all 0.2s ease;">
+          Auditar Link en Radar
         </button>
       </form>
 
-      <!-- Div de feedback del envío -->
-      <div id="feedback-message" style="display: none; margin-top: 1.25rem; padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.85rem; line-height: 1.4;"></div>
+      <!-- 🖥️ CONSOLA DE LOGS EN VIVO -->
+      <div id="console-wrapper" style="display: none; margin-top: 1.5rem; background: rgba(5, 7, 15, 0.95); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.15rem; font-family: monospace; font-size: 0.75rem; text-align: left; box-shadow: inset 0 0 10px rgba(0, 240, 255, 0.1); max-height: 250px; overflow-y: auto; scroll-behavior: smooth;">
+        <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(0, 240, 255, 0.1); padding-bottom: 0.5rem; margin-bottom: 0.75rem;">
+          <span style="color: var(--neon-blue); font-weight: 800; font-size: 0.7rem; letter-spacing: 0.05em; text-transform: uppercase; display: flex; align-items: center; gap: 0.35rem;">
+            <span class="pulse-dot"></span> CONSOLA DE AUDITORÍA HERMES
+          </span>
+          <span id="console-status" style="color: var(--neon-amber); font-weight: bold; font-size: 0.65rem; text-transform: uppercase;">PROCESANDO...</span>
+        </div>
+        <div id="console-logs" style="display: flex; flex-direction: column; gap: 0.4rem; line-height: 1.4; color: var(--text-muted);">
+          <!-- Logs dinámicos -->
+        </div>
+      </div>
     </section>
 
     <!-- Envíos recientes en el radar -->
@@ -95,11 +124,11 @@ function getStatusLabel(status: string) {
         {submissions.map((sub: any) => (
           <div class="cyber-card" style="padding: 1rem; background: rgba(18, 22, 41, 0.3); display: flex; flex-direction: column; gap: 0.5rem;">
             <div style="display: flex; align-items: center; justify-content: space-between;">
-              <span class={`verdict-badge ${getStatusBadgeClass(sub.status)}`} style="font-size: 0.6rem; padding: 0.2rem 0.5rem; border-radius: 6px;">
+              <span class={`verdict-badge ${getStatusBadgeClass(sub.status)}`} style="font-size: 0.65rem; padding: 0.2rem 0.5rem; border-radius: 6px;">
                 {getStatusLabel(sub.status)}
               </span>
               <span style="font-size: 0.65rem; color: var(--text-muted);">
-                {new Date(sub.created_at).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                {formatDate(sub.created_at)}
               </span>
             </div>
             
@@ -121,90 +150,314 @@ function getStatusLabel(status: string) {
 </Layout>
 
 <script>
-  const form = document.getElementById('radar-form') as HTMLFormElement;
-  const feedback = document.getElementById('feedback-message') as HTMLDivElement;
+  document.addEventListener('DOMContentLoaded', () => {
+    const appEl = document.getElementById('radar-app');
+    if (!appEl) return;
 
-  // Leer parámetros de URL para precargar campos
-  const urlParams = new URLSearchParams(window.location.search);
-  const paramUrl = urlParams.get('url');
-  const paramText = urlParams.get('text');
-  
-  const urlInput = document.getElementById('url') as HTMLInputElement;
-  const textInput = document.getElementById('text') as HTMLTextAreaElement;
+    const cleanBase = appEl.getAttribute('data-base') || '';
 
-  if (paramUrl) {
-    if (urlInput) urlInput.value = paramUrl;
-  }
-  if (paramText) {
-    const isUrl = paramText.trim().startsWith('http://') || paramText.trim().startsWith('https://');
-    if (isUrl) {
-      if (urlInput) urlInput.value = paramText.trim();
-      if (textInput) {
-        textInput.placeholder = 'Añade un comentario o aclaración sobre este enlace... (Requerido)';
-        textInput.focus();
+    const form = document.getElementById('public-report-form') as HTMLFormElement;
+    const submitBtn = document.getElementById('submit-btn') as HTMLButtonElement;
+    const consoleWrapper = document.getElementById('console-wrapper') as HTMLDivElement;
+    const consoleLogs = document.getElementById('console-logs') as HTMLDivElement;
+    const consoleStatus = document.getElementById('console-status') as HTMLSpanElement;
+    const laser = document.getElementById('scanning-laser') as HTMLDivElement;
+    const blip = document.getElementById('radar-active-blip') as HTMLDivElement;
+
+    // Leer parámetros de URL para precargar campos
+    const urlParams = new URLSearchParams(window.location.search);
+    const paramUrl = urlParams.get('url');
+    const paramText = urlParams.get('text');
+    
+    const urlInput = document.getElementById('report-url') as HTMLInputElement;
+    const textInput = document.getElementById('report-text') as HTMLTextAreaElement;
+
+    if (paramUrl) {
+      if (urlInput) urlInput.value = paramUrl;
+    }
+    if (paramText) {
+      const isUrl = paramText.trim().startsWith('http://') || paramText.trim().startsWith('https://');
+      if (isUrl) {
+        if (urlInput) urlInput.value = paramText.trim();
+        if (textInput) {
+          textInput.placeholder = 'Añade un comentario o aclaración sobre este enlace...';
+          textInput.focus();
+        }
+      } else {
+        if (textInput) textInput.value = paramText;
       }
-    } else {
-      if (textInput) textInput.value = paramText;
+    }
+
+    if (form) {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const url = urlInput.value;
+        const text = textInput.value;
+
+        // Activar efectos visuales de escaneo
+        submitBtn.disabled = true;
+        submitBtn.style.opacity = '0.5';
+        submitBtn.innerText = 'ESCANEANDO RED...';
+        
+        laser.style.display = 'block';
+        if (blip) {
+          blip.style.display = 'block';
+          blip.style.animation = 'blipPulse 1s infinite';
+        }
+        
+        consoleLogs.innerHTML = '';
+        consoleWrapper.style.display = 'block';
+        consoleStatus.innerText = 'ANALIZANDO';
+        consoleStatus.style.color = 'var(--neon-amber)';
+
+        const appendLog = (msg: string, type = 'info') => {
+          const row = document.createElement('div');
+          row.style.wordBreak = 'break-all';
+          
+          if (type === 'success') {
+            row.style.color = '#00ffc4'; // neon green
+          } else if (type === 'error') {
+            row.style.color = '#ff3366'; // neon rose
+          } else if (type === 'warn') {
+            row.style.color = '#ffb020'; // neon amber
+          } else {
+            row.style.color = '#00f0ff'; // neon blue
+          }
+          
+          row.innerText = `> ${msg}`;
+          consoleLogs.appendChild(row);
+          
+          // Auto scroll
+          consoleWrapper.scrollTop = consoleWrapper.scrollHeight;
+        };
+
+        try {
+          appendLog('Iniciando auditoría de enlace local en caliente...', 'info');
+
+          const response = await fetch(`${cleanBase}/api/report`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ url, text })
+          });
+
+          if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.error || `Error HTTP ${response.status}`);
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder('utf-8');
+          let buffer = '';
+          let jobId = '';
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Mantener el fragmento incompleto
+
+            for (const line of lines) {
+              if (line.trim()) {
+                try {
+                  const logObj = JSON.parse(line);
+                  appendLog(logObj.message, logObj.status);
+                  if (logObj.status === 'queued' && logObj.jobId) {
+                    jobId = logObj.jobId;
+                  }
+                } catch (e) {
+                  appendLog(line, 'info');
+                }
+              }
+            }
+          }
+
+          if (jobId) {
+            appendLog('Iniciando seguimiento de progreso en la cola...', 'info');
+            
+            // Iniciar polling
+            const pollInterval = setInterval(async () => {
+              try {
+                const pollResp = await fetch(`${cleanBase}/api/job-status?id=${jobId}`);
+                if (!pollResp.ok) return;
+
+                const jobData = await pollResp.json();
+                if (jobData.success) {
+                  const phase = jobData.progress_phase || 'En cola';
+                  const percent = jobData.progress_percent || 0;
+                  
+                  appendLog(`[Hermes] ${phase} (${percent}%)`, 'info');
+
+                  if (jobData.status === 'completed') {
+                    clearInterval(pollInterval);
+                    appendLog('🎉 [AUDITORÍA FINALIZADA] El análisis ha concluido con éxito.', 'success');
+                    appendLog(`🔗 Ver desmentido en vivo: http://localhost:4321/noticia/${jobData.slug}`, 'success');
+                    
+                    consoleStatus.innerText = 'COMPLETADO';
+                    consoleStatus.style.color = '#00ffc4';
+
+                    // Limpiar UI al terminar
+                    submitBtn.disabled = false;
+                    submitBtn.style.opacity = '1';
+                    submitBtn.innerText = 'Auditar Link en Radar';
+                    laser.style.display = 'none';
+                    if (blip) blip.style.display = 'none';
+                    form.reset();
+
+                    setTimeout(() => {
+                      window.location.reload();
+                    }, 8000);
+                  } else if (jobData.status === 'failed') {
+                    clearInterval(pollInterval);
+                    appendLog(`❌ [Hermes] El procesamiento ha fallado: ${jobData.error_message || 'Error desconocido'}`, 'error');
+                    consoleStatus.innerText = 'FALLIDO';
+                    consoleStatus.style.color = '#ff3366';
+
+                    submitBtn.disabled = false;
+                    submitBtn.style.opacity = '1';
+                    submitBtn.innerText = 'Auditar Link en Radar';
+                    laser.style.display = 'none';
+                    if (blip) blip.style.display = 'none';
+                  }
+                }
+              } catch (pollErr: any) {
+                console.error('Error en polling:', pollErr.message);
+              }
+            }, 2500);
+          } else {
+            throw new Error('No se pudo establecer conexión de cola con el motor.');
+          }
+
+        } catch (err: any) {
+          appendLog(`Error: ${err.message}`, 'error');
+          consoleStatus.innerText = 'ERROR';
+          consoleStatus.style.color = '#ff3366';
+          submitBtn.disabled = false;
+          submitBtn.style.opacity = '1';
+          submitBtn.innerText = 'Auditar Link en Radar';
+          laser.style.display = 'none';
+          if (blip) blip.style.display = 'none';
+        }
+      });
+    }
+  });
+</script>
+
+<style is:global>
+  /*  ESTILOS DEL RADAR GRÁFICO */
+  .radar-container {
+    position: relative;
+    width: 130px;
+    height: 130px;
+    margin: 0 auto 1.25rem auto;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(0, 240, 255, 0.03) 0%, rgba(7, 9, 19, 0.95) 75%);
+    border: 1px solid rgba(0, 240, 255, 0.2);
+    overflow: hidden;
+    box-shadow: 0 0 25px rgba(0, 240, 255, 0.05);
+  }
+
+  .radar-sweep {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 200%;
+    height: 200%;
+    background: conic-gradient(from 0deg, rgba(0, 240, 255, 0.15) 0deg, rgba(0, 240, 255, 0) 120deg);
+    transform-origin: top left;
+    transform: translate(-50%, -50%) rotate(0deg);
+    animation: sweep 4s linear infinite;
+    border-radius: 50%;
+  }
+
+  .radar-grid {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    border-radius: 50%;
+    background: 
+      radial-gradient(circle, transparent 25%, rgba(0, 240, 255, 0.08) 26%, transparent 27%, transparent 55%, rgba(0, 240, 255, 0.08) 56%, transparent 57%, transparent 80%, rgba(0, 240, 255, 0.08) 81%, transparent 82%),
+      linear-gradient(to right, rgba(0, 240, 255, 0.03) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
+    background-size: 100% 100%, 15px 15px, 15px 15px;
+    background-position: center;
+  }
+
+  .radar-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 6px;
+    height: 6px;
+    background-color: var(--neon-blue);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 8px var(--neon-blue);
+    z-index: 5;
+  }
+
+  .radar-blip {
+    position: absolute;
+    top: 35%;
+    left: 60%;
+    width: 5px;
+    height: 5px;
+    background-color: var(--neon-rose);
+    border-radius: 50%;
+    display: none;
+    z-index: 4;
+  }
+
+  @keyframes sweep {
+    from { transform: translate(-50%, -50%) rotate(0deg); }
+    to { transform: translate(-50%, -50%) rotate(360deg); }
+  }
+
+  @keyframes blipPulse {
+    0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 39, 67, 0.8); }
+    70% { transform: scale(1.5); box-shadow: 0 0 0 8px rgba(220, 39, 67, 0); }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 39, 67, 0); }
+  }
+
+  /*  LASER DE ESCANEO DE CARD */
+  .scanning-bar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, rgba(0, 240, 255, 0) 0%, rgba(0, 240, 255, 0.8) 50%, rgba(0, 240, 255, 0) 100%);
+    box-shadow: 0 0 10px rgba(0, 240, 255, 0.6);
+    z-index: 10;
+    animation: scan 2s linear infinite;
+    display: none;
+  }
+
+  @keyframes scan {
+    0% { top: 0%; }
+    50% { top: 100%; }
+    100% { top: 0%; }
+  }
+
+  @keyframes pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(0, 240, 255, 0.4);
+    }
+    70% {
+      box-shadow: 0 0 0 10px rgba(0, 240, 255, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(0, 240, 255, 0);
     }
   }
 
-  if (form) {
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      
-      const formData = new FormData(form);
-      const url = formData.get('url')?.toString() || '';
-      const text = formData.get('text')?.toString() || '';
-
-      // Reset feedback
-      feedback.style.display = 'none';
-      feedback.className = '';
-
-      try {
-        const res = await fetch('/api/submit-radar', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ url, text })
-        });
-
-        const result = await res.json();
-
-        feedback.style.display = 'block';
-        if (result.success) {
-          if (result.already_exists && result.slug) {
-            feedback.className = 'feedback-success';
-            feedback.style.backgroundColor = 'rgba(0, 240, 255, 0.05)';
-            feedback.style.border = '1px solid var(--neon-blue)';
-            feedback.style.color = '#fff';
-            feedback.innerHTML = `<strong>${result.message}</strong><br/> Veredicto: <span class="verdict-badge green" style="font-size: 0.65rem;">${result.verdict}</span><br/><br/><a href="/noticia/${result.slug}" class="cyber-btn" style="padding: 0.35rem 0.75rem; font-size: 0.7rem; text-decoration: none; display: inline-block;">Ver verificación en vivo &rarr;</a>`;
-          } else {
-            feedback.className = 'feedback-success';
-            feedback.style.backgroundColor = 'rgba(0, 230, 115, 0.05)';
-            feedback.style.border = '1px solid var(--neon-green)';
-            feedback.style.color = 'var(--neon-green)';
-            feedback.innerHTML = result.message;
-            form.reset();
-            // Recargar tras 2 segundos para ver reflejado el cambio
-            setTimeout(() => {
-              window.location.reload();
-            }, 2500);
-          }
-        } else {
-          feedback.className = 'feedback-error';
-          feedback.style.backgroundColor = 'rgba(255, 51, 102, 0.05)';
-          feedback.style.border = '1px solid var(--neon-rose)';
-          feedback.style.color = 'var(--neon-rose)';
-          feedback.innerHTML = ` Error: ${result.error}`;
-        }
-      } catch (err: any) {
-        feedback.style.display = 'block';
-        feedback.style.backgroundColor = 'rgba(255, 51, 102, 0.05)';
-        feedback.style.border = '1px solid var(--neon-rose)';
-        feedback.style.color = 'var(--neon-rose)';
-        feedback.innerHTML = ` Error de red: ${err.message}`;
-      }
-    });
+  .pulse-dot {
+    width: 6px;
+    height: 6px;
+    background-color: var(--neon-blue);
+    border-radius: 50%;
+    display: inline-block;
+    animation: pulse 1.5s infinite;
   }
-</script>
+</style>

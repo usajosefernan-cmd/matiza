@@ -37,6 +37,22 @@ export async function evaluateRelevance(itemText, platform, metrics = {}, signal
   console.log(`[Relevance Gate] Evaluando relevancia para item de ${platform}...`);
   const deterministic = deterministicSignals(itemText, platform, metrics);
   
+  const isHighlyViral = deterministic.virality >= 6.0 || Number(metrics.likes) > 5000 || Number(metrics.declared_views) > 50000 || platform === 'Instagram' || platform === 'TikTok';
+
+  if (isHighlyViral) {
+    return {
+      should_process: true,
+      reason: `Contenido altamente viral o relevante en plataforma de video (${platform}). Se fuerza la auditoría de evidencias en red.`,
+      priority: 'alta',
+      public_interest_score: 8.5,
+      virality_score: Math.max(7.5, deterministic.virality),
+      harm_score: 8.0,
+      verification_value_score: 8.5,
+      commercial_noise_score: 2.0,
+      recommended_action: 'process'
+    };
+  }
+
   const minimumVirality = Number.parseFloat(process.env.MIN_VIRALITY_SCORE || '3.5');
   const minimumInterest = Number.parseFloat(process.env.MIN_PUBLIC_INTEREST_SCORE || '5.5');
 

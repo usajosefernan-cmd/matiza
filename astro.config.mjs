@@ -1,5 +1,6 @@
 import { defineConfig } from 'astro/config';
 import { loadEnv } from 'vite';
+import node from '@astrojs/node';
 
 const env = loadEnv(process.env.NODE_ENV || 'production', process.cwd(), '');
 const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('dev') || process.argv.includes('--port');
@@ -9,6 +10,10 @@ const baseRoute = isDev ? '/' : (process.env.PUBLIC_BASE_PATH || env.PUBLIC_BASE
 export default defineConfig({
   site: 'https://143-47-35-167.sslip.io',
   base: baseRoute,
+  output: 'hybrid',
+  adapter: node({
+    mode: 'standalone'
+  }),
   integrations: [],
   vite: {
     server: {
